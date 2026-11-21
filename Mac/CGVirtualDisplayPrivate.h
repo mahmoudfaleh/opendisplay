@@ -3,8 +3,9 @@
 //
 //  Reverse-engineered interface of the private CoreGraphics virtual display
 //  API. Originally published by Khaos Tian (VirtualDisplayExp) and used in
-//  DeskPad, BetterDisplay et al. Private API: capped at 60 Hz and may break
-//  across macOS versions — personal/sideloaded use only.
+//  DeskPad, BetterDisplay et al. Private API: historically capped at 60 Hz;
+//  higher requests must be verified against the actual display mode. May
+//  break across macOS versions — personal/sideloaded use only.
 //
 
 #import <Cocoa/Cocoa.h>

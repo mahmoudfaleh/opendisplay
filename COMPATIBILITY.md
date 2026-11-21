@@ -17,6 +17,22 @@ This document is the companion policy for *evolving* it.
 
 ---
 
+## Fork cadence compatibility
+
+The high-refresh development branch retains protocol version 3 and the same
+length-prefixed metadata/Annex B bytes. No newer receiver is required for the
+packet-copy optimization. These are selection rules, not hardware test results.
+
+| Sender | Receiver | Rate behavior |
+| --- | --- | --- |
+| Fork, default | Existing receiver | Existing 60 FPS target or lower codec/decode limit |
+| Fork, 120 Hz selected | Legacy or 60 FPS receiver | At most 60 FPS, bounded by its offer |
+| Existing sender | Fork receiver | Existing sender's 60 FPS target |
+| Fork, 120 Hz selected | Fork ProMotion receiver | Up to 120 FPS only when source, codec and decode limits permit |
+
+Native direct-touch support is not yet implemented. The upstream pointer/scroll
+and Pencil contracts are unchanged by this cadence/packet checkpoint.
+
 ## 1. The problem
 
 We cut Mac and iOS from one release tag, but distribution is not simultaneous:

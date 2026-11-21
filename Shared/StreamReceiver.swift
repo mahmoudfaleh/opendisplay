@@ -954,7 +954,7 @@ final class StreamReceiver: ObservableObject {
         hello["panel"] = panel.json
         // Additive joint capability. The legacy rectangle below stays on the
         // wire while independently updated senders remain in the field.
-        var h264: [String: Any] = ["codec": "h264", "maxFrameRate": 60]
+        var h264: [String: Any] = ["codec": "h264", "maxFrameRate": min(120, displayMaxFrameRate)]
         if let maxEncodeWide, let maxEncodeHigh {
             h264["maxWidth"] = maxEncodeWide
             h264["maxHeight"] = maxEncodeHigh

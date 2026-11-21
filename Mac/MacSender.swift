@@ -75,7 +75,6 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var connection: NWConnection?
     private var virtualDisplay: VirtualDisplay?
     private let queue = DispatchQueue(label: "sender.video")
-    private let startCode: [UInt8] = [0, 0, 0, 1]
 
     // The dial target. Written on `queue` only (after init): the controller
     // can migrate a live session between transports via switchTransport.
@@ -83,6 +82,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private let endpointName: String
     private let mode: CaptureMode
     private let quality: StreamQuality
+    private let refreshRate: StreamRefreshRate
     // Stable per-device serial for the virtual display, so macOS can tell
     // multiple OpenDisplay monitors apart and persist their arrangement.
     private let displaySerial: UInt32
@@ -362,12 +362,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var baseBitrate = 0
 
     init(transport: SenderTransport, name: String, mode: CaptureMode,
-         quality: StreamQuality = .best, displaySerial: UInt32 = 0x0001,
+         quality: StreamQuality = .best, refreshRate: StreamRefreshRate = .standard,
+         displaySerial: UInt32 = 0x0001,
          identityOffset: UInt32 = 0, awaitingWake: Bool = false) {
         self.transport = transport
         self.endpointName = name
         self.mode = mode
         self.quality = quality
+        self.refreshRate = refreshRate
         self.displaySerial = displaySerial
         self.baseIdentityOffset = identityOffset
         self.awaitingWake = awaitingWake
@@ -747,6 +749,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     return VirtualDisplay(name: displayName,
                                           pointsWide: pointsWide, pointsHigh: pointsHigh,
                                           scale: bootstrapCanvas.scale,
+                                          refreshRate: self.refreshRate.requestedRate(displayMaximum: info.displayMaxFrameRate),
                                           descriptorMaxPixelsPerAxis: canvasPlan.descriptorMaxPixelsPerAxis,
                                           sizeInMillimeters: mm,
                                           serialNum: serial &+ totalOffset,
@@ -1282,6 +1285,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // the desktop; presets keep scaling from the desktop as the receiver
         // presents it (#322).
         let presentable = info.facts.pixels
+        let requestedRate = refreshRate.requestedRate(displayMaximum: info.displayMaxFrameRate)
+        let sourceRate = StreamRefreshRate.sourceLimit(
+            requested: requestedRate,
+            reported: CGDisplayCopyDisplayMode(display.displayID)?.refreshRate)
+        if sourceRate < requestedRate {
+            Log.info("requested \(requestedRate)Hz; source reports \(sourceRate)Hz — using source cadence")
+        }
         func select(_ codec: String) throws -> VideoStreamConfiguration {
             mode == .extend
                 ? try VideoStreamConfiguration.makeForCanvas(
@@ -1292,7 +1302,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     legacyCeiling: legacyCeiling,
                     receiverCapabilities: info.videoCaps,
                     displayMaxFrameRate: info.displayMaxFrameRate,
-                    presentable: presentable)
+                    presentable: presentable,
+                    requestedFramesPerSecond: sourceRate)
                 : try VideoStreamConfiguration.make(
                     source: source,
                     quality: quality,
@@ -1300,7 +1311,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     legacyCeiling: legacyCeiling,
                     receiverCapabilities: info.videoCaps,
                     displayMaxFrameRate: info.displayMaxFrameRate,
-                    presentable: presentable)
+                    presentable: presentable,
+                    requestedFramesPerSecond: sourceRate)
         }
         var selected = try select(preferredCodec(for: info, source: source))
         var pixelsWide = selected.encodedSize.width
@@ -1313,10 +1325,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let config = SCStreamConfiguration()
         config.width = pixelsWide
         config.height = pixelsHigh
-        // Ask for 120 even though the virtual display is 60Hz: requesting
-        // exactly 1/60 makes SCK's rate limiter skip frames that arrive a
-        // hair early (beat frequency) — measured ~51fps instead of 60.
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 120)
+        // Oversample the selected cadence to avoid SCK's beat-frequency skips.
+        // FrameRateLimiter below remains the authority for encoder admission.
+        config.minimumFrameInterval = CMTime(value: 1, timescale: Int32(selected.framesPerSecond * 2))
         // 420v matches the encoder's native input — skips a BGRA→YUV conversion
         // inside VideoToolbox. (`-pixfmt bgra` reverts for A/B testing.)
         config.pixelFormat = UserDefaults.standard.string(forKey: "pixfmt") == "bgra"
@@ -1344,6 +1355,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             pixelsHigh = selected.encodedSize.height
             config.width = pixelsWide
             config.height = pixelsHigh
+            config.minimumFrameInterval = CMTime(value: 1, timescale: Int32(selected.framesPerSecond * 2))
             Log.info("stream selected: H264 \(pixelsWide)x\(pixelsHigh) @\(selected.framesPerSecond)fps from \(sourceDescription) quality=\(quality.rawValue)")
             try setupEncoder(selected)
         }
@@ -3031,10 +3043,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.handleEncodeOutputFailureLogAction(logAction)
                 return
             }
-            if let data = self.annexB(from: buffer) {
-                let sndMs = Int64(Date().timeIntervalSince1970 * 1000)
-                var framed = Data("{\"cap\":\(capturedAtMs),\"snd\":\(sndMs)}".utf8)
-                framed.append(data)
+            let sndMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let metadata = Data("{\"cap\":\(capturedAtMs),\"snd\":\(sndMs)}".utf8)
+            if let framed = self.videoPacket(from: buffer, metadata: metadata) {
                 // Transfer the pending unit to the sender queue. It remains an
                 // encode-in-flight until delivery/discard, then becomes a
                 // pending send without an observable backpressure gap.
@@ -3147,15 +3158,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // MARK: - VideoToolbox NALUs -> Annex B
 
-    private func annexB(from sample: CMSampleBuffer) -> Data? {
+    private func videoPacket(from sample: CMSampleBuffer, metadata: Data) -> Data? {
         guard let block = CMSampleBufferGetDataBuffer(sample) else { return nil }
         var len = 0, total = 0
         var ptr: UnsafeMutablePointer<Int8>?
         guard CMBlockBufferGetDataPointer(block, atOffset: 0,
                 lengthAtOffsetOut: &len, totalLengthOut: &total,
-                dataPointerOut: &ptr) == noErr, let ptr else { return nil }
+                dataPointerOut: &ptr) == noErr, let ptr, len == total else { return nil }
 
-        var out = Data(capacity: total + 128)
+        var out = WirePacketBuilder(prefix: metadata, payloadCapacity: total + 128)
         // On keyframes, prepend decoder parameter sets from the format description.
         if isKeyframe(sample), let fmt = CMSampleBufferGetFormatDescription(sample) {
             let hevc = CMFormatDescriptionGetMediaSubType(fmt) == kCMVideoCodecType_HEVC
@@ -3175,8 +3186,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                         parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil)
                 if status == noErr,
                    let psPtr {
-                    out.append(contentsOf: startCode)
-                    out.append(Data(bytes: psPtr, count: psLen))
+                    out.appendStartCode()
+                    out.append(psPtr, count: psLen)
                 }
             }
         }
@@ -3188,12 +3199,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             memcpy(&nalLen, raw + offset, 4)
             nalLen = CFSwapInt32BigToHost(nalLen)
             offset += 4
-            guard offset + Int(nalLen) <= total else { break }
-            out.append(contentsOf: startCode)
-            out.append(Data(bytes: raw + offset, count: Int(nalLen)))
+            guard nalLen > 0, Int(nalLen) <= total - offset else { return nil }
+            out.appendStartCode()
+            out.append((raw + offset).assumingMemoryBound(to: UInt8.self), count: Int(nalLen))
             offset += Int(nalLen)
         }
-        return out
+        guard offset == total else { return nil }
+        return out.finalize()
     }
 
     private func isKeyframe(_ sample: CMSampleBuffer) -> Bool {
@@ -3287,36 +3299,34 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// socket replacement, `streamConfig`, and the first video payload have a
     /// single total order. Frames encoded for a retired connection are dropped;
     /// `becomeReady` forces the next admitted frame to be an IDR.
-    private func enqueueFramed(_ payload: Data, captureGeneration: UInt64,
+    private func enqueueFramed(_ packet: Data, captureGeneration: UInt64,
                                connectionGeneration: UInt64) {
         queue.async { [weak self] in
             guard let self else { return }
             self.finishPendingEncode()
             guard self.captureGenerationNow == captureGeneration,
                   self.connectionGeneration == connectionGeneration else { return }
-            self.sendFramedOnQueue(payload)
+            self.sendFramedOnQueue(packet)
         }
     }
 
-    private func sendFramedOnQueue(_ payload: Data) {
+    private func sendFramedOnQueue(_ frame: Data) {
         guard let connection, connectionReady else { return }
         guard peerAcceptsActiveCodec else {
             needsKeyframe = true   // the frame after the confirming hello must be an IDR
             return
         }
-        var header = UInt32(payload.count).bigEndian
-        var frame = Data(bytes: &header, count: 4)
-        frame.append(payload)
+        let wireBytes = frame.count
         pendingSends += 1
         connection.send(content: frame, completion: .contentProcessed { [weak self] error in
-            guard let self else { return }
-            self.pendingSends -= 1
+            guard let self, self.connection === connection else { return }
+            self.pendingSends = max(0, self.pendingSends - 1)
             if let error {
                 Log.info("send error: \(error)")
                 return
             }
             self.framesSent += 1
-            self.bytesSent += frame.count
+            self.bytesSent += wireBytes
             // Report stats roughly once a second.
             let elapsed = Date().timeIntervalSince(self.statsWindowStart)
             if elapsed >= 1.0 {

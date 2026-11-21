@@ -615,7 +615,7 @@ final class ReceiverModel: ObservableObject {
             maxEncodeWide: nil, maxEncodeHigh: nil,
             hevc: decodesHEVC
                 ? VideoCapability(codec: "hevc", maxWidth: longSide, maxHeight: longSide,
-                                  maxFrameRate: 60)
+                                  maxFrameRate: min(120, displayMaxFrameRate))
                 : nil)
         receiver.setPanel(pixelsWide: w, pixelsHigh: h, scale: scale,
                           displayMaxFrameRate: displayMaxFrameRate,

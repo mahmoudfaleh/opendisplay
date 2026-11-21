@@ -26,6 +26,23 @@ scroll input.
 
 ---
 
+## This fork
+
+Development branch: `feat/high-refresh-streaming`. Adds a 30/60/120 Hz sender
+option with source/panel/decoder limits, iPhone ProMotion configuration, and
+less video packet copying on both USB and WiFi. 120 Hz virtual-display support
+depends on macOS accepting the mode; a clamped or unknown source falls back
+to 60 Hz. Physical throughput and on-device 120 FPS are not yet verified.
+
+Native touch is under investigation; the current input path still uses pointer
+and scroll events. See [development status](FORK_PROGRESS.md) and
+[touch investigation](research/fork-touch-investigation.md) for implemented
+behavior, checks and remaining work. No completed native-touch claim is made.
+
+Core checks without full Xcode: `tools/fork/check-core.sh` and
+`tools/fork/check-sender.sh`. Building the full apps still requires the upstream
+Xcode/xcodegen setup below. No fork binary release is available yet.
+
 ## Why OpenDisplay exists
 
 Turning an iPhone or iPad into an external display for a Mac is a solved

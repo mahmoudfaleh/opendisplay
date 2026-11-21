@@ -582,6 +582,17 @@ be freely combined. Unknown codecs and fields MUST be ignored. The sender
 intersects a receiver entry with its own encoder constraints and the requested
 desktop/quality policy, then reports the result with `streamConfig`.
 
+This fork adds a sender cadence preference of 30, 60 or 120 FPS without
+changing the wire format or protocol version. The requested rate is bounded
+by the source's reported refresh rate, `displayMaxFrameRate`, codec envelope,
+decode throughput and sender codec-level constraints. An absent panel limit
+retains the 60 FPS legacy ceiling. An unknown or OS-clamped source also stays
+at or below 60 FPS. `streamConfig.framesPerSecond` reports the selected
+operating point; it is not a measurement of actual presentation throughput.
+The fork's iOS receiver can offer up to 120 FPS on a panel that reports that
+rate; real decoder/presentation performance still requires device testing.
+Older senders retain their existing 60 FPS selection against that offer.
+
 Every official receiver advertises H.264. A receiver with a hardware HEVC
 decoder also advertises HEVC: the Mac receiver up to 5120×2880 at 60 FPS, the
 iOS receiver up to its window's long side on either axis at 60 FPS, within any

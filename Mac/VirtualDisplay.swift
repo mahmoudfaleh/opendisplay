@@ -16,6 +16,7 @@ final class VirtualDisplay {
     private let display: CGVirtualDisplay
     private var settings: CGVirtualDisplaySettings
     private let maxPixelsPerAxis: Int
+    private(set) var refreshRate: Int
     private(set) var pointsWide: Int
     private(set) var pointsHigh: Int
     /// Backing scale: 2 (HiDPI) or 1. A resize may change it.
@@ -41,6 +42,7 @@ final class VirtualDisplay {
     /// `onOriginChange` reports where the display sits afterwards, so the
     /// caller can persist user drags.
     init?(name: String, pointsWide: Int, pointsHigh: Int, scale: Int = 2,
+          refreshRate: Int = 60,
           descriptorMaxPixelsPerAxis: Int, sizeInMillimeters: CGSize,
           serialNum: UInt32 = 0x0001, productID: UInt32 = 0x4F53,
           restoreOrigin: CGPoint? = nil,
@@ -48,6 +50,7 @@ final class VirtualDisplay {
         self.pointsWide = pointsWide
         self.pointsHigh = pointsHigh
         self.scale = scale < 2 ? 1 : 2
+        self.refreshRate = max(1, min(refreshRate, 120))
         // Reserve the longer orientation on both axes. The fixed headroom also
         // covers later receiver scaling changes (for example Larger Text to
         // More Space) without destroying and recreating the virtual display.
@@ -79,9 +82,11 @@ final class VirtualDisplay {
         settings = CGVirtualDisplaySettings()
         settings.hiDPI = self.scale == 2 ? 1 : 0
         settings.modes = [
-            CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: 60)
+            CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: CGFloat(self.refreshRate))
         ]
-        guard display.apply(settings) else {
+        // Some OS versions reject high-rate virtual modes. Keep the desktop
+        // usable, and let the sender announce the actual source cadence.
+        guard applyMode(settings, pointsWide: pointsWide, pointsHigh: pointsHigh) else {
             Log.info("CGVirtualDisplay applySettings FAILED")
             return nil
         }
@@ -136,7 +141,7 @@ final class VirtualDisplay {
         let newSettings = CGVirtualDisplaySettings()
         newSettings.hiDPI = scale == 2 ? 1 : 0
         newSettings.modes = [
-            CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: 60)
+            CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: CGFloat(refreshRate))
         ]
         // The enforcement tick must not run between the new mode and its
         // placement: it would re-apply the old origin target, or report
@@ -144,7 +149,7 @@ final class VirtualDisplay {
         // overlapping another cannot reopen the tick for both.
         resizesInFlight += 1
         defer { resizesInFlight -= 1 }
-        guard display.apply(newSettings) else {
+        guard applyMode(newSettings, pointsWide: pointsWide, pointsHigh: pointsHigh) else {
             Log.info("virtual display \(display.displayID) applySettings FAILED during resize")
             return false
         }
@@ -202,6 +207,17 @@ final class VirtualDisplay {
     /// Non-zero while `resize` waits for WindowServer's placement.
     private var resizesInFlight = 0
 
+    private func applyMode(_ proposed: CGVirtualDisplaySettings,
+                           pointsWide: Int, pointsHigh: Int) -> Bool {
+        if display.apply(proposed) { return true }
+        guard refreshRate > 60 else { return false }
+        proposed.modes = [CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: 60)]
+        guard display.apply(proposed) else { return false }
+        refreshRate = 60
+        Log.info("high-refresh virtual mode refused — falling back to 60Hz")
+        return true
+    }
+
     /// Returns true when the display is (now) in its mode at `scale` (HiDPI
     /// for a 2x display, the 1x mode otherwise), or when there
     /// is nothing left to try for now. Silent when nothing needed doing — this
@@ -222,12 +238,12 @@ final class VirtualDisplay {
         guard Date() >= hidpiRetryAfter else { return true }
         let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
         guard let modes = CGDisplayCopyAllDisplayModes(display.displayID, opts) as? [CGDisplayMode],
-              let hidpi = modes.first(where: {
+              let hidpi = modes.filter({
                   // Width AND height: a stale saved mode can share one axis.
                   $0.width == pointsWide && $0.height == pointsHigh
                       && $0.pixelWidth == pointsWide * scale
                       && $0.pixelHeight == pointsHigh * scale
-              }) else {
+              }).max(by: { $0.refreshRate < $1.refreshRate }) else {
             if recover {
                 // Same back-off as a refusal: a mode list that stays without
                 // our @2x entry would otherwise be re-applied and logged every
@@ -249,7 +265,8 @@ final class VirtualDisplay {
         }
         if let current = CGDisplayCopyDisplayMode(display.displayID),
            current.width == hidpi.width, current.height == hidpi.height,
-           current.pixelWidth == hidpi.pixelWidth, current.pixelHeight == hidpi.pixelHeight {
+           current.pixelWidth == hidpi.pixelWidth, current.pixelHeight == hidpi.pixelHeight,
+           abs(current.refreshRate - hidpi.refreshRate) < 1 {
             hidpiRefusals = 0   // WindowServer may have restored it for us
             return true
         }

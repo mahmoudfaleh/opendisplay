@@ -151,6 +151,7 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - MacTests
+      - tools/fork/CoreChecks.swift
       - Mac/DisplayArrangement.swift
       - Mac/OriginRestore.swift
       - Mac/StreamConfiguration.swift
@@ -163,6 +164,7 @@ targets:
       - Mac/Log.swift
       - Mac/LogPolicies.swift
       - Shared/Protocol.swift
+      - Shared/WirePacketBuilder.swift
       - Shared/DirectCable.swift
       - Shared/LogSnapshot.swift
       - MacReceiver/FullscreenPreference.swift
@@ -192,6 +194,7 @@ targets:
       properties:
         CFBundleDisplayName: OpenDisplay
         CFBundleIconName: AppIcon
+        CADisableMinimumFrameDurationOnPhone: true
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}

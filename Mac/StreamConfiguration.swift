@@ -1,5 +1,26 @@
 import Foundation
 
+/// Requested cadence. Selection still obeys the source, panel and decoder.
+enum StreamRefreshRate: Int, CaseIterable {
+    case economy = 30, standard = 60, high = 120
+
+    var label: String { "\(rawValue) Hz" }
+
+    /// Unknown/legacy panels stay at 60. Never infer 120 Hz from resolution.
+    func requestedRate(displayMaximum: Int?) -> Int {
+        min(rawValue, displayMaximum.flatMap { $0 > 0 ? $0 : nil } ?? 60)
+    }
+
+    /// A virtual mode may be accepted yet clamped by WindowServer. A zero
+    /// rate is unspecified (including variable-refresh displays), not 120.
+    static func sourceLimit(requested: Int, reported: Double?) -> Int {
+        guard let reported, reported.isFinite, reported >= 1 else {
+            return min(requested, 60)
+        }
+        return min(requested, max(1, Int(min(reported, 120).rounded())))
+    }
+}
+
 /// Capture-resolution / bitrate trade-off. The virtual display runs at the
 /// receiver's size, capped at the Best stream (`canvasPixels`); presets only
 /// scale the captured/encoded stream, so lower presets cut encode, transmit,
@@ -112,9 +133,9 @@ struct VideoStreamConfiguration: Equatable {
         let scaled = PixelSize(
             width: even(Int(Double(shown.width) * quality.scale)),
             height: even(Int(Double(shown.height) * quality.scale)))
-        let targetFPS = max(1, min(requestedFramesPerSecond,
+        let targetFPS = max(1, min(120, requestedFramesPerSecond,
                                    displayMaxFrameRate.flatMap { $0 > 0 ? $0 : nil }
-                                       ?? requestedFramesPerSecond))
+                                       ?? 60))
 
         // Absence is the legacy H.264 contract. Never infer HEVC support from
         // an older receiver that did not advertise codec capabilities.
@@ -171,7 +192,10 @@ struct VideoStreamConfiguration: Equatable {
                 fps = safeH264FrameRate(width: size.width, height: size.height,
                                         requested: fps)
             }
-            return Self(codec: codec, encodedSize: size, bitrate: quality.bitrate,
+            // Preserve the existing <=60 FPS presets; give high-refresh frames
+            // the same nominal bit budget instead of halving detail at 120.
+            let bitrate = quality.bitrate * max(60, fps) / 60
+            return Self(codec: codec, encodedSize: size, bitrate: bitrate,
                         framesPerSecond: fps)
         }
 
@@ -223,18 +247,21 @@ struct VideoStreamConfiguration: Equatable {
                               legacyCeiling: PixelSize? = nil,
                               receiverCapabilities: [VideoCapability]? = nil,
                               displayMaxFrameRate: Int? = nil,
-                              presentable: PixelSize? = nil) throws -> Self {
+                              presentable: PixelSize? = nil,
+                              requestedFramesPerSecond: Int = defaultFramesPerSecond) throws -> Self {
         let fromCanvas = try make(source: canvas, quality: quality, codec: codec,
                                   legacyCeiling: legacyCeiling,
                                   receiverCapabilities: receiverCapabilities,
                                   displayMaxFrameRate: displayMaxFrameRate,
-                                  presentable: presentable)
+                                  presentable: presentable,
+                                  requestedFramesPerSecond: requestedFramesPerSecond)
         guard panel != canvas,
               let fromPanel = try? make(source: panel, quality: quality, codec: codec,
                                         legacyCeiling: legacyCeiling,
                                         receiverCapabilities: receiverCapabilities,
                                         displayMaxFrameRate: displayMaxFrameRate,
-                                        presentable: presentable),
+                                        presentable: presentable,
+                                        requestedFramesPerSecond: requestedFramesPerSecond),
               fromPanel.encodedSize.width <= canvas.width,
               fromPanel.encodedSize.height <= canvas.height,
               fromPanel.encodedSize.width * fromPanel.encodedSize.height

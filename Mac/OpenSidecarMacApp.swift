@@ -226,6 +226,9 @@ final class SenderController: ObservableObject {
     @Published var quality = StreamQuality(rawValue: UserDefaults.standard.string(forKey: "quality") ?? "") ?? .best {
         didSet { UserDefaults.standard.set(quality.rawValue, forKey: "quality") }
     }
+    @Published var refreshRate = StreamRefreshRate(rawValue: UserDefaults.standard.integer(forKey: "frameRate")) ?? .standard {
+        didSet { UserDefaults.standard.set(refreshRate.rawValue, forKey: "frameRate") }
+    }
 
     var running: Bool { !sessions.isEmpty }
 
@@ -736,7 +739,8 @@ final class SenderController: ObservableObject {
 
         let name = label(for: target)
         let sender = MacSender(transport: transport, name: name, mode: mode,
-                               quality: quality, displaySerial: Self.displaySerial(for: id),
+                               quality: quality, refreshRate: refreshRate,
+                               displaySerial: Self.displaySerial(for: id),
                                identityOffset: identityOffset(for: id),
                                awaitingWake: awaitingWake)
         let session = DeviceSession(id: id, target: target, name: name, sender: sender)
@@ -1104,6 +1108,18 @@ struct ContentView: View {
                     }
                     .onChange(of: controller.quality) { controller.restartAll() }
                     Text(controller.quality.explanation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("Refresh rate", selection: $controller.refreshRate) {
+                        ForEach(StreamRefreshRate.allCases, id: \.self) { rate in
+                            Text(rate.label).tag(rate)
+                        }
+                    }
+                    .onChange(of: controller.refreshRate) { controller.restartAll() }
+                    Text("120 Hz requires a compatible display and decoder. The stream uses a lower rate when the source or receiver requires it.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
