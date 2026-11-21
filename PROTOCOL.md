@@ -355,6 +355,19 @@ nothing before it arrives.
 * `videoCaps` (array, optional): codec-specific decoder/presentation envelopes
   (section 6.5). Absent means the legacy H.264 contract. Additive at `pv` 3,
   no bump.
+* `directTouch` (boolean, optional, fork): the iOS receiver can send complete
+  finger snapshots. The field alone does not activate native input.
+
+The fork's native touch exchange is additive. On a trusted USB Extend session,
+the sender can send `{"type":"directTouchSession","session":"<UUID>"}` after
+initializing a digitizer for that display. The receiver then sends
+`{"type":"directTouchFrame","session":"<UUID>","contacts":[{"id":1,"x":0.25,"y":0.5}]}`.
+Coordinates are normalized to the visible video rect, with origin at the top
+left. Each snapshot carries every active finger, with unique IDs from 1 to 10
+that stay stable until lift. Omitting an ID ends it. An empty snapshot releases
+all fingers. The sender ignores malformed and retired-session frames.
+Disconnect, capture replacement, or a `directTouchSession` without a session
+field clears the negotiated mode. Legacy peers ignore these fields and messages.
 
 A receiver MUST re-send `hello` on the live connection whenever its
 announced dimensions change (rotation, a fold, a window resize). The

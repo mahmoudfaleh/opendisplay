@@ -41,10 +41,11 @@ zero-heavy fixtures tested, with a dense-`1` case roughly unchanged. See
 [measurements and limits](research/fork-receiver-performance-2026-11-21.md);
 this is not a measurement of total application FPS or link bandwidth.
 
-Native touch is under investigation; the current input path still uses pointer
-and scroll events. See [development status](FORK_PROGRESS.md) and
-[touch investigation](research/fork-touch-investigation.md) for implemented
-behavior, checks and remaining work. No completed native-touch claim is made.
+An experimental native touchscreen path sends iPhone and iPad finger contacts
+as HID digitizer reports to the OpenDisplay virtual display. The first build
+targets USB Extend sessions on macOS 27. It needs a development build with
+Apple's virtual HID entitlement and has yet to pass a signed device test.
+See [native touch setup and verification](research/fork-touch-investigation.md).
 
 Core checks without full Xcode: `tools/fork/check-core.sh`,
 `tools/fork/check-sender.sh` and `tools/fork/check-receiver.sh`.

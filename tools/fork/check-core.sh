@@ -19,6 +19,7 @@ do {
 SWIFT
 swiftc -O "$@" -module-cache-path "$fork_build/modules" \
     "$fork_root/Shared/Protocol.swift" \
+    "$fork_root/Shared/DirectTouchFrame.swift" \
     "$fork_root/Shared/WirePacketBuilder.swift" \
     "$fork_root/Shared/AnnexBLayout.swift" \
     "$fork_root/Shared/AVCCBlockBuffer.swift" \
@@ -27,6 +28,7 @@ swiftc -O "$@" -module-cache-path "$fork_build/modules" \
     "$fork_root/Mac/VirtualCanvasSizing.swift" \
     "$fork_root/Mac/StreamConfiguration.swift" \
     "$fork_root/Mac/EncodeWorkCounter.swift" \
+    "$fork_root/Mac/TouchscreenReport.swift" \
     "$fork_root/tools/fork/CoreChecks.swift" \
     "$fork_root/tools/fork/ReceiverCoreChecks.swift" \
     "$fork_build/main.swift" -o "$fork_build/core-checks"

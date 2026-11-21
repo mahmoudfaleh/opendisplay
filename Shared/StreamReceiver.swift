@@ -76,6 +76,7 @@ final class StreamReceiver: ObservableObject {
     @Published var peerSignal: PeerUpdateSignal?
     /// Mac protocol version from the most recent `welcome` message.
     @Published private(set) var macProtocolVersion = WireProtocol.assumedWhenAbsent
+    @Published private(set) var directTouchSession: UUID?
 
     /// True when the connected Mac understands pencil/proximity wire messages.
     var macSupportsPencilWire: Bool { macProtocolVersion >= WireProtocol.pencilWireVersion }
@@ -123,6 +124,7 @@ final class StreamReceiver: ObservableObject {
     private var cursorLostThisWindow = 0
     private var cursorPort: UInt16 { port &+ 1 }
     private let queue = DispatchQueue(label: "receiver.video")
+    private var acceptedDirectTouchSession: UUID?
     private var buffer = Data()
     private var formatDesc: CMVideoFormatDescription?
     #if DEBUG
@@ -411,6 +413,10 @@ final class StreamReceiver: ObservableObject {
     func setRenderingPaused(_ paused: Bool) {
         queue.async {
             guard paused != self.renderingPaused else { return }
+            if paused, let session = self.acceptedDirectTouchSession {
+                self.sendControl(["type": DirectTouchFrame.messageType,
+                                  "session": session.uuidString, "contacts": []])
+            }
             self.renderingPaused = paused
             Log.info(paused ? "rendering paused (backgrounded)" : "rendering resumed")
             if !paused {
@@ -609,11 +615,6 @@ final class StreamReceiver: ObservableObject {
         listener?.newConnectionHandler = { [weak self] conn in
             guard let self else { return }
             Log.info("new connection from \(String(describing: conn.endpoint))")
-            // usbmux-forwarded (cable) connections arrive from loopback;
-            // anything else came over the network.
-            let peer = String(describing: conn.endpoint)
-            self.transport = (peer.hasPrefix("127.0.0.1") || peer.hasPrefix("::1")
-                              || peer.hasPrefix("localhost")) ? "USB" : "WiFi"
             // A Bonjour dial races IPv6 and IPv4 and both handshakes can
             // complete; the sender cancels its loser within milliseconds.
             // Adopting every newcomer at once evicted the winner for a
@@ -690,6 +691,9 @@ final class StreamReceiver: ObservableObject {
         if greeted { Log.info("newcomer proved itself — adopting it as the session") }
         connection?.cancel()
         connection = conn
+        // Only an adopted socket is allowed to change the session transport.
+        // A provisional LAN connection must not change a live USB session.
+        transport = Self.isLoopback(conn.endpoint) ? "USB" : "WiFi"
         // The race is decided: rival candidates die here.
         for pending in pendingConnections where pending !== conn { pending.cancel() }
         pendingConnections.removeAll()
@@ -746,6 +750,16 @@ final class StreamReceiver: ObservableObject {
     private static func isFailed(_ state: NWConnection.State) -> Bool {
         if case .failed = state { return true }
         return false
+    }
+
+    private static func isLoopback(_ endpoint: NWEndpoint) -> Bool {
+        guard case .hostPort(let host, _) = endpoint else { return false }
+        switch host {
+        case .ipv4(let address): return address.isLoopback
+        case .ipv6(let address): return address.isLoopback
+        case .name(let name, _): return name.lowercased() == "localhost"
+        @unknown default: return false
+        }
     }
 
     // MARK: - Liveness (ping + watchdog)
@@ -852,6 +866,9 @@ final class StreamReceiver: ObservableObject {
                 let msg = "OpenDisplay on the connecting computer is too old for this \(deviceKind) app. Update it there to reconnect."
                 DispatchQueue.main.async { self.peerSignal = .updateMac(message: msg) }
             }
+        case DirectTouchFrame.sessionMessage:
+            guard offersDirectTouch, transport == "USB" else { return }
+            setDirectTouchSession((obj["session"] as? String).flatMap(UUID.init(uuidString:)))
         case WireMessage.streamConfig:
             // H.264 remains implicit for old senders. New senders announce the
             // codec before the first binary frame.
@@ -914,6 +931,7 @@ final class StreamReceiver: ObservableObject {
     }
 
     private func resetStreamState() {
+        setDirectTouchSession(nil)
         buffer.removeAll(keepingCapacity: true)
         formatDesc = nil
         streamCodec = "h264"
@@ -949,6 +967,7 @@ final class StreamReceiver: ObservableObject {
             "pv": WireProtocol.version,   // issue #132 — absent on old receivers
             "displayMaxFrameRate": displayMaxFrameRate,
         ]
+        if offersDirectTouch { hello["directTouch"] = true }
         let panel = panelOverride ?? PanelAnnouncement(
             pixelsWide: devicePixelsWide, pixelsHigh: devicePixelsHigh, scale: deviceScale)
         hello["panel"] = panel.json
@@ -1064,6 +1083,25 @@ final class StreamReceiver: ObservableObject {
     /// Two-finger scroll: dx/dy in video pixels (natural-scrolling sign).
     func sendScroll(dx: Double, dy: Double) {
         sendControl(["type": "scroll", "dx": dx, "dy": dy])
+    }
+
+    func sendDirectTouch(_ contacts: [DirectTouchFrame.Contact], session: UUID) {
+        queue.async { [weak self] in
+            guard let self, self.acceptedDirectTouchSession == session,
+                  contacts.isEmpty || !self.renderingPaused,
+                  let conn = self.connection, conn.state == .ready else { return }
+            self.sendControl(["type": DirectTouchFrame.messageType,
+                              "session": session.uuidString,
+                              "contacts": contacts.map(\.fields)], on: conn)
+        }
+    }
+
+    private var offersDirectTouch: Bool { deviceKind == "iPhone" || deviceKind == "iPad" }
+
+    private func setDirectTouchSession(_ session: UUID?) {
+        guard acceptedDirectTouchSession != session else { return }
+        acceptedDirectTouchSession = session
+        DispatchQueue.main.async { self.directTouchSession = session }
     }
 
     /// Apple Pencil stroke/hover. azimuth and altitude are radians.
@@ -1536,6 +1574,7 @@ final class StreamReceiver: ObservableObject {
     }
 
     private func setConnected(_ value: Bool) {
+        if !value { setDirectTouchSession(nil) }
         DispatchQueue.main.async {
             self.connected = value
             if !value {

@@ -12,9 +12,9 @@ if swiftc -typecheck -swift-version 5 -target arm64-apple-macos14 \
     Mac/StreamConfiguration.swift Mac/EncodeWorkCounter.swift Mac/DesktopPolicy.swift Mac/PhoneInfo.swift \
     Mac/Usbmux.swift Mac/USBAccessory.swift Mac/AndroidUSBFunction.swift \
     Mac/AccessoryDeviceWatcher.swift Mac/DisplayArrangement.swift \
-    Mac/OriginRestore.swift Mac/InputInjector.swift Mac/CaptureSourceCheck.swift \
+    Mac/OriginRestore.swift Mac/InputInjector.swift Mac/NativeTouchscreen.swift Mac/TouchscreenReport.swift Mac/CaptureSourceCheck.swift \
     Mac/TestPatternWindow.swift Mac/Log.swift Mac/LogPolicies.swift \
-    Shared/Protocol.swift Shared/WirePacketBuilder.swift Shared/DirectCable.swift \
+    Shared/Protocol.swift Shared/DirectTouchFrame.swift Shared/WirePacketBuilder.swift Shared/DirectCable.swift \
     Shared/AppStore.swift Shared/LogSnapshot.swift \
     > build/fork-core/sender-typecheck.log 2>&1; then
     echo "PASS: sender implementation typechecked (warnings: build/fork-core/sender-typecheck.log)"

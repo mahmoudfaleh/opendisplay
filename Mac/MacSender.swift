@@ -168,6 +168,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var lastHello: PhoneInfo?
     private var helloContinuation: CheckedContinuation<PhoneInfo, Error>?
     private var inputInjector: InputInjector?
+    // Scoped to the active USB connection and accessed only on queue.
+    private var nativeTouchscreen: NativeTouchscreen?
+    private var directTouchSession: UUID?
+    private var touchAttemptedDisplay: CGDirectDisplayID?
 
     // Liveness: both sides ping every 2s; if nothing arrives for 5s the link
     // is half-open (e.g. usbmuxd accepted but the device is gone) — reconnect.
@@ -455,6 +459,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     if stopped { return }
                 }
                 Log.info("Accessibility permission granted — touch input live")
+                queue.async { [weak self] in self?.refreshDirectTouch() }
             }
         }
     }
@@ -1401,6 +1406,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         queue.async {
             self.captureRecoveryFailures = 0
             self.waitingForConsole = false
+            self.refreshDirectTouch()
         }
         Log.info("capture started: \(pixelsWide)x\(pixelsHigh) display \(display.displayID) generation \(generation) mode \(mode.rawValue) localCursor=\(localCursor)")
         let kind = lastHello?.kind ?? "device"
@@ -1462,6 +1468,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // a dead transport forever.
             self.disconnectedSince = Date()
             self.connectionReady = false
+            self.endDirectTouch()
             self.currentPathDirectLink = false   // the new transport re-classifies
             self.dialGeneration += 1   // a dial still in flight must not adopt
             self.connection?.cancel()
@@ -2095,7 +2102,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     }
                     self.connection = conn
                     conn.stateUpdateHandler = { [weak self] state in
-                        guard let self else { return }
+                        guard let self, self.connection === conn else { return }
                         switch state {
                         case .failed(let error):
                             Log.info("usb connection failed: \(error)")
@@ -2103,6 +2110,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                             self.scheduleReconnect()
                         case .cancelled:
                             self.connectionReady = false
+                            self.endDirectTouch()
                         default:
                             break
                         }
@@ -2165,6 +2173,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func scheduleReconnect() {
+        endDirectTouch()
         guard !stopped else { return }
         if everConnected {
             if let since = disconnectedSince {
@@ -2519,7 +2528,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             let len = Int(UInt32(bigEndian: data.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }))
             guard len > 0, len < 1 << 20 else { return }
             conn.receive(minimumIncompleteLength: len, maximumLength: len) { [weak self] payload, _, _, error in
-                guard let self, error == nil, let payload, payload.count == len else { return }
+                guard let self, self.connection === conn, error == nil,
+                      let payload, payload.count == len else { return }
                 self.handleControl(payload)
                 self.receiveControl(on: conn)
             }
@@ -2597,6 +2607,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 // message types. Sending on every hello is idempotent — the
                 // phone dedupes by content.
                 sendWelcome()
+                refreshDirectTouch()
                 if let selected = activeStreamConfigurationSnapshot, peerAcceptsActiveCodec {
                     sendStreamConfiguration(selected)
                 }
@@ -2610,6 +2621,22 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 } else if let previous, streamSelectionInputsChanged(from: previous, to: info) {
                     if stream != nil { scheduleReconfigure() } else { _ = noteSelectionChange() }
                 }
+            }
+        case DirectTouchFrame.messageType:
+            guard !stopped, connectionReady, case .usb = transport,
+                  payload.count <= 4_096, let nativeTouchscreen,
+                  let frame = try? JSONDecoder().decode(DirectTouchFrame.self, from: payload),
+                  frame.session == directTouchSession, frame.isValid,
+                  captureDisplayID == nativeTouchscreen.displayID,
+                  CGDisplayIsActive(nativeTouchscreen.displayID) != 0 else { return }
+            guard AXIsProcessTrusted() else {
+                endDirectTouch(notify: true)
+                return
+            }
+            if !nativeTouchscreen.send(frame.contacts) {
+                Log.info("native touch: HID report failed")
+                endDirectTouch(notify: true)
+                touchAttemptedDisplay = captureDisplayID
             }
         case "touch":
             if let phase = obj["phase"] as? String,
@@ -3391,10 +3418,52 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         frameRateLimiter = FrameRateLimiter(framesPerSecond: 60)
         pipelineLock.unlock()
         captureDisplayID = 0
-        queue.async { self.captureSourceCheck = CaptureSourceCheck() }
+        queue.async {
+            self.captureSourceCheck = CaptureSourceCheck()
+            self.endDirectTouch(notify: true)
+        }
         if discardingLastFrame {
             lastPixelBuffer = nil
             lastCaptureAt = .distantPast
         }
+    }
+
+    private func refreshDirectTouch() {
+        guard !stopped, mode == .extend, connectionReady, helloSeenOnConnection,
+              case .usb = transport, lastHello?.directTouch == true,
+              #available(macOS 27.0, *), captureDisplayID != 0,
+              UserDefaults.standard.bool(forKey: "nativeTouch"), AXIsProcessTrusted()
+        else {
+            if nativeTouchscreen != nil { endDirectTouch(notify: true) }
+            return
+        }
+        let display = captureDisplayID
+        if nativeTouchscreen?.displayID == display { return }
+        guard touchAttemptedDisplay != display else { return }
+        endDirectTouch(notify: true)
+        touchAttemptedDisplay = display
+        guard let device = NativeTouchscreen(displayID: display, queue: queue) else {
+            Log.info("native touch unavailable: virtual touchscreen creation failed (check Apple HID signing)")
+            return
+        }
+        nativeTouchscreen = device
+        // Give WindowServer time to associate the new HID device with its screen.
+        queue.asyncAfter(deadline: .now() + .milliseconds(350)) { [weak self, weak device] in
+            guard let self, let device, self.nativeTouchscreen === device,
+                  !self.stopped, self.connectionReady, self.captureDisplayID == display,
+                  AXIsProcessTrusted(), CGDisplayIsActive(display) != 0 else { return }
+            self.directTouchSession = device.session
+            self.sendJSONFrame("{\"type\":\"\(DirectTouchFrame.sessionMessage)\",\"session\":\"\(device.session.uuidString)\"}")
+            Log.info("native touch: digitizer created for OpenDisplay display \(display)")
+        }
+    }
+
+    private func endDirectTouch(notify: Bool = false) {
+        if notify, directTouchSession != nil {
+            sendJSONFrame("{\"type\":\"\(DirectTouchFrame.sessionMessage)\"}")
+        }
+        directTouchSession = nil
+        nativeTouchscreen = nil
+        touchAttemptedDisplay = nil
     }
 }

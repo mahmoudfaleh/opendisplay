@@ -157,6 +157,7 @@ targets:
       - Mac/OriginRestore.swift
       - Mac/StreamConfiguration.swift
       - Mac/EncodeWorkCounter.swift
+      - Mac/TouchscreenReport.swift
       - Mac/VirtualCanvasSizing.swift
       - Mac/PhoneInfo.swift
       - Mac/DesktopPolicy.swift
@@ -166,6 +167,7 @@ targets:
       - Mac/Log.swift
       - Mac/LogPolicies.swift
       - Shared/Protocol.swift
+      - Shared/DirectTouchFrame.swift
       - Shared/WirePacketBuilder.swift
       - Shared/AnnexBLayout.swift
       - Shared/AVCCBlockBuffer.swift

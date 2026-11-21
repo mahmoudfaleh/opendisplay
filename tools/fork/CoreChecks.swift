@@ -112,6 +112,46 @@ enum ForkCoreChecks {
             try check(encodes.count == 1, "repeated pipeline replacement must preserve current backpressure")
             encodes.finish(fresh)
         }
+        let session = UUID()
+        typealias Finger = DirectTouchFrame.Contact
+        let left = Finger(id: 1, x: 0, y: 1)
+        let right = Finger(id: 2, x: 1, y: 0)
+        func frame(_ contacts: [Finger]) -> DirectTouchFrame {
+            DirectTouchFrame(session: session, contacts: contacts)
+        }
+        let wireFrame = try JSONSerialization.data(withJSONObject: [
+            "type": DirectTouchFrame.messageType, "session": session.uuidString,
+            "contacts": [left.fields, right.fields],
+        ])
+        let decodedTouch = try JSONDecoder().decode(DirectTouchFrame.self, from: wireFrame)
+        try check(decodedTouch.isValid && decodedTouch.session == session && decodedTouch.contacts == [left, right],
+                  "direct touch wire format must preserve session and distinct finger coordinates")
+        try check(frame([]).isValid, "empty touch frame must release all contacts")
+        try check(!frame([left, left]).isValid, "duplicate finger IDs must be rejected")
+        try check(!frame([Finger(id: 0, x: 0, y: 0)]).isValid, "zero contact ID must be rejected")
+        try check(!frame([Finger(id: 11, x: 0, y: 0)]).isValid, "out-of-range contact ID must be rejected")
+        try check(!frame([Finger(id: 1, x: 1.001, y: 0)]).isValid, "off-screen contact must be rejected")
+        try check(!frame([Finger(id: 1, x: .nan, y: .infinity)]).isValid, "non-finite contact must be rejected")
+
+        var touchReport = TouchscreenReport()
+        let first = touchReport.update([left, right])
+        try check(first.count == 1 && first[0].count == 102 && first[0].last == 2,
+                  "HID report must have fixed byte size and two active contacts")
+        try check(Array(first[0].prefix(7)) == [1, 7, 1, 0, 0, 255, 127],
+                  "touch flags and edge coordinates must match the HID layout")
+        try check(Array(first[0][11..<17]) == [7, 2, 255, 127, 0, 0],
+                  "second finger must use its own ID and axes")
+        let lift = touchReport.update([right])
+        try check(lift.count == 2 && lift[0][1] == 4 && lift[0][11] == 7 && lift[1].last == 1,
+                  "lifting a finger must end only its contact")
+        let clear = touchReport.update([])
+        try check(clear.count == 2 && clear[0][1] == 4 && clear[1].last == 0,
+                  "disconnect must send a lift followed by an empty report")
+        var replacement = TouchscreenReport()
+        _ = replacement.update([left])
+        let swap = replacement.update([right])
+        try check(swap[0][2] == 1 && swap[0][1] == 4 && swap[1][2] == 2 && swap[1][1] == 7,
+                  "an old finger must lift before a replacement finger goes down")
         count += try ReceiverCoreChecks.run()
         print("PASS: \(count) core regression checks")
     }

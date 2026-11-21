@@ -368,6 +368,10 @@ struct SettingsView: View {
                     LabeledRow("Listening", value: "Port 9000")
                     LabeledRow("Connection",
                                value: receiver.connected ? "Connected" : "Waiting for a computer")
+                    if receiver.connected {
+                        LabeledRow("Finger input", value: receiver.directTouchSession != nil
+                                   ? "Native touchscreen" : "Pointer compatibility")
+                    }
                     if receiver.videoSize != .zero {
                         LabeledRow("Stream",
                                    value: "\(Int(receiver.videoSize.width))×\(Int(receiver.videoSize.height)) @ \(receiver.fps) fps")
@@ -772,7 +776,7 @@ private struct WindowObserver: UIViewRepresentable {
 /// Forwards touches as normalized video-space coordinates (touchscreen mode).
 struct VideoLayerView: UIViewRepresentable {
     let displayLayer: AVSampleBufferDisplayLayer
-    let receiver: StreamReceiver
+    @ObservedObject var receiver: StreamReceiver
     let useMetal: Bool
 
     func makeUIView(context: Context) -> VideoView {
@@ -814,6 +818,8 @@ struct VideoLayerView: UIViewRepresentable {
         pan.minimumNumberOfTouches = 2
         pan.maximumNumberOfTouches = 2
         view.addGestureRecognizer(pan)
+        view.compatibilityPan = pan
+        view.updateDirectTouchSession()
 
         // Local cursor echo: position updates ride the ~2ms control path
         // instead of the ~30ms video path, so the pointer feels native.
@@ -835,14 +841,22 @@ struct VideoLayerView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: VideoView, context: Context) {
+        uiView.updateDirectTouchSession()
         // videoSize arrives after the format description — re-fit the layers.
         uiView.setNeedsLayout()
+    }
+
+    static func dismantleUIView(_ uiView: VideoView, coordinator: ()) {
+        uiView.releaseDirectTouches()
     }
 
     final class VideoView: UIView {
         weak var receiver: StreamReceiver?
         var metalRenderer: MetalVideoRenderer?
         let inputEngine = InputCaptureEngine()
+        weak var compatibilityPan: UIPanGestureRecognizer?
+        private var nativeSession: UUID?
+        private var nativeContacts: [ObjectIdentifier: DirectTouchFrame.Contact] = [:]
 
         private let cursorLayer: CALayer = {
             let layer = CALayer()
@@ -888,6 +902,7 @@ struct VideoLayerView: UIViewRepresentable {
             }
             let began = !holdingStaleFrame
             holdingStaleFrame = true
+            if began { releaseDirectTouches() }
             // A Mac that never sends a new desktop (an older sender, mirror
             // mode, a fixed Display size, or the size settled back on one it
             // already streams) must not leave the picture blurred: reveal
@@ -1029,6 +1044,57 @@ struct VideoLayerView: UIViewRepresentable {
         private var twoFingerActive = false
         private var lastPan = CGPoint.zero
         private var lastNorm: (x: Double, y: Double) = (0.5, 0.5)
+
+        func updateDirectTouchSession() {
+            let session = receiver?.directTouchSession
+            guard session != nativeSession else { return }
+            releaseDirectTouches()
+            if downSent {
+                receiver?.sendTouch(phase: "cancelled", x: lastNorm.x, y: lastNorm.y)
+            }
+            discardPendingDown()
+            nativeSession = session
+            compatibilityPan?.isEnabled = session == nil
+            twoFingerActive = false
+        }
+
+        func releaseDirectTouches() {
+            guard !nativeContacts.isEmpty, let nativeSession else { return }
+            nativeContacts.removeAll()
+            receiver?.sendDirectTouch([], session: nativeSession)
+        }
+
+        private func sendDirect(_ phase: String, touches: Set<UITouch>, session: UUID) {
+            guard !holdingStaleFrame, let rect = videoRect() else {
+                releaseDirectTouches()
+                return
+            }
+            var changed = false
+            for touch in touches where touch.type == .direct {
+                let key = ObjectIdentifier(touch)
+                if phase == "ended" || phase == "cancelled" {
+                    changed = nativeContacts.removeValue(forKey: key) != nil || changed
+                    continue
+                }
+                let point = touch.location(in: self)
+                guard let norm = normalized(point) else { continue }
+                let id: Int
+                if let known = nativeContacts[key] {
+                    id = known.id
+                } else {
+                    guard phase == "began", rect.contains(point),
+                          let free = (1...DirectTouchFrame.maxContacts).first(where: { candidate in
+                              !nativeContacts.values.contains { $0.id == candidate }
+                          }) else { continue }
+                    id = free
+                }
+                nativeContacts[key] = .init(id: id, x: norm.x, y: norm.y)
+                changed = true
+            }
+            if changed {
+                receiver?.sendDirectTouch(nativeContacts.values.sorted { $0.id < $1.id }, session: session)
+            }
+        }
 
         @objc func didTwoFingerPan(_ recognizer: UIPanGestureRecognizer) {
             guard let video = receiver?.videoSize, video != .zero else { return }
@@ -1189,11 +1255,12 @@ struct VideoLayerView: UIViewRepresentable {
         }
 
         private func routeTouches(_ phase: String, _ touches: Set<UITouch>, _ event: UIEvent?, ended: Bool) {
+            updateDirectTouchSession()
             let pencil = touches.filter { isPencil($0) }
-            let finger = touches.filter { isFinger($0) }
             let usePencilWire = receiver?.macSupportsPencilWire ?? false
 
             if !pencil.isEmpty {
+                releaseDirectTouches()
                 if usePencilWire {
                     inputEngine.handle(pencil, event: event, ended: ended)
                 } else {
@@ -1201,8 +1268,12 @@ struct VideoLayerView: UIViewRepresentable {
                 }
             }
             // Palm rejection: ignore resting fingers while the pen is down.
-            if !finger.isEmpty && !inputEngine.hasActivePen {
-                send(phase, finger, event)
+            guard !inputEngine.hasActivePen else { return }
+            if let nativeSession {
+                sendDirect(phase, touches: touches, session: nativeSession)
+                send(phase, touches.filter { $0.type == .indirectPointer }, event)
+            } else {
+                send(phase, touches, event)
             }
         }
 

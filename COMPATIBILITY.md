@@ -30,8 +30,10 @@ packet-copy optimization. These are selection rules, not hardware test results.
 | Existing sender | Fork receiver | Existing sender's 60 FPS target |
 | Fork, 120 Hz selected | Fork ProMotion receiver | Up to 120 FPS only when source, codec and decode limits permit |
 
-Native direct-touch support is not yet implemented. The upstream pointer/scroll
-and Pencil contracts are unchanged by this cadence/packet checkpoint.
+The fork also has an experimental direct-touch option for USB Extend on
+macOS 27 with an entitled development build. Both ends must support it.
+Other combinations continue using the existing pointer, scroll and Pencil
+messages. See [native touch setup](research/fork-touch-investigation.md).
 
 ## 1. The problem
 

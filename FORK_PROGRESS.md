@@ -92,9 +92,9 @@ clear remaining limitations; never fake performance or native touch validation.
 2. Keep the feature branch published through authenticated GitHub Desktop if
    terminal networking remains unavailable. Initial commit `abbd6bc` was already
    published; inspect ahead/behind status for later checkpoints.
-3. Follow research/fork-touch-investigation.md. Apple publishes touch reception
-   docs and HID components; no reusable Sidecar injection source was found.
-   Investigate a working direct-touch backend before claiming native support.
+3. Verify the direct-touch prototype with a provisioned Mac build and real
+   iPhone/iPad receiver. The unsigned workspace cannot create the digitizer.
+   See research/fork-touch-investigation.md for signing and device checks.
 4. Improve scroll phases/precise deltas and gesture targeting without moving
    the cursor. Keep compatibility behavior explicitly identified.
 5. Profile the frame packet builder and end-to-end transport with synthetic
@@ -134,3 +134,18 @@ The user requested continued optimization after the first checkpoint.
 - Reproduction: `research/fork-receiver-performance-2026-11-21.md` and
   `tools/fork/benchmark-receiver.sh`. Native touch, physical link measurements
   and full application/iOS builds remain open.
+
+## Direct touch implementation
+
+- Added a native virtual HID touchscreen bound to the active OpenDisplay
+  display. The receiver sends individual on-screen fingers over a negotiated
+  USB Extend session. The sender submits HID reports with contact IDs, position,
+  confidence and lifts. Pencil stays on its independent path.
+- The experimental sender requires macOS 27, the usual Accessibility permission,
+  an opt-in launch flag and an Apple Development provisioning profile with
+  virtual HID access. See `research/fork-touch-investigation.md` for setup.
+- The sender and shared receiver typechecked and iOS sources parsed. The
+  1,363 core assertions passed normally and under AddressSanitizer. On macOS
+  27.0.1 this workspace has no signing identity or full Xcode. An unsigned
+  IOKit creation probe was refused. End-to-end delivery with a signed Mac
+  sender and iPhone/iPad receiver remains the test needed before release.
