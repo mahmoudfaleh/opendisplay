@@ -149,3 +149,19 @@ The user requested continued optimization after the first checkpoint.
   27.0.1 this workspace has no signing identity or full Xcode. An unsigned
   IOKit creation probe was refused. End-to-end delivery with a signed Mac
   sender and iPhone/iPad receiver remains the test needed before release.
+
+## Android tablet receiver
+
+- Added native finger snapshots to the Android receiver over Android Open
+  Accessory USB. The Mac accepts them through the same virtual HID digitizer
+  used by the iOS receiver. Native touch stays scoped to the negotiated
+  physical USB session. Existing Wi-Fi and legacy sender combinations use
+  pointer compatibility.
+- The 34 Android protocol tests passed, including contact identity, lifts,
+  cancellation and JSON formatting. The Android receiver Kotlin sources
+  compiled using the available API 35 SDK, cached dependencies and temporary
+  resource symbols. The Mac sender typechecked.
+- Full Android Gradle packaging is unverified. The shell could not start
+  Gradle's local coordination socket, and the installed SDK was API 35
+  whereas the project targets API 36. The Mac still needs an Apple
+  Development profile allowing virtual HID before device tests can run.

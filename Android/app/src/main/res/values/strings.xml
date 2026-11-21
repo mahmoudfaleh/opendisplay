@@ -30,6 +30,9 @@
     <string name="row_connected">Connected</string>
     <string name="row_waiting">Waiting for a computer</string>
     <string name="row_stream">Stream</string>
+    <string name="row_touch_input">Finger input</string>
+    <string name="touch_native">Native touchscreen</string>
+    <string name="touch_pointer">Pointer compatibility</string>
     <string name="section_name">Name</string>
     <string name="name_footer">Shown in the WiFi list of OpenDisplay on your computer.</string>
     <string name="section_analytics">Analytics</string>

@@ -37,6 +37,7 @@ import app.opendisplay.android.net.Advertiser
 import app.opendisplay.android.net.ReceiverServer
 import app.opendisplay.android.protocol.AnnexB
 import app.opendisplay.android.protocol.Codec
+import app.opendisplay.android.protocol.DirectTouch
 import app.opendisplay.android.protocol.Messages
 import app.opendisplay.android.protocol.Panel
 import app.opendisplay.android.protocol.PenInput
@@ -110,6 +111,8 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     // Main-thread state.
     private var connected = false
     private var hasPicture = false
+    private val directTouch = DirectTouch()
+    private var directTouchToken: String? = null
     private var nightMode = 0
     @Volatile private var blockingMessage: String? = null
 
@@ -165,6 +168,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
 
     override fun onPause() {
         super.onPause()
+        releaseDirectTouches()
         shake.stop()
     }
 
@@ -198,6 +202,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
 
     private fun showSettings() {
         if (supportFragmentManager.findFragmentByTag(SETTINGS) != null) return
+        releaseDirectTouches()
         SettingsDialog().show(supportFragmentManager, SETTINGS)
     }
 
@@ -227,6 +232,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
 
     // SettingsDialog.Host
     override val isConnected: Boolean get() = connected
+    override val usesDirectTouch: Boolean get() = server.directTouchSession != null
     override val streamSummary: String?
         get() = streamInfo?.let { info ->
             if (hasPicture) "$info, %.0f fps".format(java.util.Locale.US, stats.lastSummary.fps) else info
@@ -426,6 +432,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         deviceKind = DeviceIdentity.deviceKind(this)
         displayMaxFrameRate = maxRefreshRate()
         if (next == panel) return
+        releaseDirectTouches()
         panel = next
         videoCaps = DecoderCaps.videoCaps(w, h)
         Log.i(TAG, "panel ${w}x$h @${next.scale}, caps $videoCaps")
@@ -502,12 +509,26 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     }
 
     private fun onTouch(event: MotionEvent): Boolean {
-        if (!connected || !hasPicture || senderAsleep || blockingMessage != null) return true
+        if (!connected || !hasPicture || senderAsleep || blockingMessage != null) {
+            releaseDirectTouches()
+            return true
+        }
+        val token = server.directTouchSession
+        if (token != directTouchToken) {
+            releaseDirectTouches()
+            gestures.cancel()
+            directTouchToken = token
+        }
         val action = event.actionMasked
         // The pen owns the gesture it starts; fingers wait while it is down
         // (palm rejection, as on iOS).
         if (isStylus(event) || pen.penDown) {
+            releaseDirectTouches()
             return if (isStylus(event)) onPen(event) else true
+        }
+        if (token != null && event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER) {
+            onDirectTouch(event, token)
+            return true
         }
         val primary = point(event.getX(0), event.getY(0))
         when (action) {
@@ -529,6 +550,43 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
             MotionEvent.ACTION_CANCEL -> gestures.cancel()
         }
         return true
+    }
+
+    private fun onDirectTouch(event: MotionEvent, token: String) {
+        val action = event.actionMasked
+        if (action == MotionEvent.ACTION_CANCEL || action == MotionEvent.ACTION_UP) {
+            releaseDirectTouches()
+            return
+        }
+        if (action == MotionEvent.ACTION_DOWN) releaseDirectTouches()
+        if (action == MotionEvent.ACTION_POINTER_UP) directTouch.lift(event.getPointerId(event.actionIndex))
+
+        val left = videoFrame.left + videoFrame.videoLeft
+        val top = videoFrame.top + videoFrame.videoTop
+        val right = left + videoFrame.videoRectWidth
+        val bottom = top + videoFrame.videoRectHeight
+        val fingerLanded = action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN
+        for (index in 0 until event.pointerCount) {
+            if (event.getToolType(index) != MotionEvent.TOOL_TYPE_FINGER ||
+                action == MotionEvent.ACTION_POINTER_UP && index == event.actionIndex) continue
+            val pointerId = event.getPointerId(index)
+            val point = point(event.getX(index), event.getY(index))
+            if (!point.nx.isFinite() || !point.ny.isFinite()) continue
+            if (fingerLanded && index == event.actionIndex &&
+                point.px >= left && point.px < right && point.py >= top && point.py < bottom) {
+                directTouch.begin(pointerId, point.nx, point.ny)
+            } else {
+                directTouch.move(pointerId, point.nx, point.ny)
+            }
+        }
+        val contacts = directTouch.snapshot()
+        if (contacts.isNotEmpty() || action == MotionEvent.ACTION_POINTER_UP) {
+            server.sendDirectTouch(token, contacts)
+        }
+    }
+
+    private fun releaseDirectTouches() {
+        if (directTouch.clear()) directTouchToken?.let { server.sendDirectTouch(it, emptyList()) }
     }
 
     /** Root coordinates to normalized video coordinates (7: top-left origin). */

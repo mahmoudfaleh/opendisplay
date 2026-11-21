@@ -4,6 +4,11 @@ Turns an Android phone or tablet into an extra display for the OpenDisplay
 Mac sender. It speaks the same wire protocol as the iPhone/iPad receiver
 ([PROTOCOL.md](../PROTOCOL.md), pv 3), so the Mac app needs no changes.
 
+The fork adds experimental native finger input over USB accessory mode with
+the macOS 27 sender. It requires an Apple-authorized development build of the
+Mac sender. See [setup and device testing](../research/fork-touch-investigation.md)
+for the signing requirements and USB connection steps.
+
 Supports Android 5.0 (API 21) and later, so old tablets can be second screens
 too. Newer platform features (decoder low-latency mode, display cutouts,
 immersive insets) are used when present.

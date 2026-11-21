@@ -1,7 +1,7 @@
 # Native touchscreen development build
 
-OpenDisplay can now forward a snapshot of up to ten fingers from the iOS receiver
-to an experimental virtual HID touchscreen. IOKit creates a device for the
+OpenDisplay can forward a snapshot of up to ten fingers from the Android or
+iOS receiver to an experimental virtual HID touchscreen. IOKit creates a device for the
 extended display's UUID. Each report includes contact positions, IDs, finger
 confidence and explicit lifts, so a receiving macOS app can use its own gesture
 recognizers. Pencil uses its separate input path. When the native session is
@@ -9,8 +9,9 @@ unavailable the receiver uses its existing input mode.
 
 ## Build and try
 
-1. Build both apps from the fork using the [repository build instructions](../README.md).
-   Use macOS 27 or later for the sender.
+1. Build the Mac sender and your receiver from this branch. For Android,
+   use the [Android build instructions](../Android/README.md). Use macOS 27
+   or later for the sender.
 2. For the Mac sender's Debug configuration, select an Apple Development
    certificate and a matching macOS App Development provisioning profile
    containing `com.apple.developer.hid.virtual.device`. The profile must match
@@ -20,17 +21,24 @@ unavailable the receiver uses its existing input mode.
    the capability. The regular release build uses its own signing settings.
 3. Launch the signed development sender with `-nativeTouch YES` in the Xcode
    scheme's launch arguments. Grant the dev sender its usual Screen Recording
-   and Accessibility permissions. Connect a trusted iPhone or iPad over USB
-   and choose **Extend**. Start the fork receiver on the device.
+   and Accessibility permissions. Choose **Extend**. On Android, use a data
+   cable and choose the tablet under USB on the Mac. When the tablet prompts
+   you, open **OpenDisplay Dev** for the USB accessory. On iOS, connect the
+   trusted iPhone or iPad over USB and open the fork receiver.
 4. The receiver's **Settings → Status → Finger input** shows the negotiated
    mode. **Native touchscreen** confirms the sender opened the digitizer.
    To verify delivery, try a tap, one-finger scroll and two-finger pinch in a
    touch-aware macOS app on the extended display. Verify that the Mac's own
    display receives no touch and that unplugging during a gesture releases it.
 
-Wi-Fi and Mirror continue to use the usual input mode. USB is the first
-supported transport for the experiment because it uses the selected trusted
-device and the existing Wi-Fi protocol lacks peer authentication.
+Native touch on Android uses Android Open Accessory mode, so the tablet
+does not need USB debugging. Wi-Fi, ADB forwarding and Mirror use pointer
+compatibility. USB keeps native input scoped to the selected cabled device.
+
+For an Android second screen today, the published OpenDisplay receiver works
+with the standard Mac sender over USB or Wi-Fi. It provides tap, drag and
+two-finger scrolling. The native path requires the fork receiver and Apple's
+virtual HID entitlement on the Mac. [OpenDisplay downloads](https://opendisplay.app/).
 
 ## What Apple publishes
 
@@ -64,6 +72,10 @@ invalid input. Tests also passed under AddressSanitizer. The iOS sources passed
 syntax parsing. This Mac runs 27.0.1, has Command Line Tools only and has no
 valid signing identity. An unsigned IOKit device-creation probe returned nil
 without sending any reports. Signed end-to-end gesture delivery remains open.
+
+The Android protocol tests exercise stable finger IDs, per-finger release,
+cancellation, contact limits and JSON snapshots. The tablet build uses the
+Android SDK. The Apple Development signing requirement applies to the Mac sender.
 
 ## ProMotion reference
 

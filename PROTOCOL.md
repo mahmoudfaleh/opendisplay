@@ -355,8 +355,9 @@ nothing before it arrives.
 * `videoCaps` (array, optional): codec-specific decoder/presentation envelopes
   (section 6.5). Absent means the legacy H.264 contract. Additive at `pv` 3,
   no bump.
-* `directTouch` (boolean, optional, fork): the iOS receiver can send complete
-  finger snapshots. The field alone does not activate native input.
+* `directTouch` (boolean, optional, fork): the receiver can send complete
+  finger snapshots. Android offers this on USB accessory connections.
+  The field alone does not activate native input.
 
 The fork's native touch exchange is additive. On a trusted USB Extend session,
 the sender can send `{"type":"directTouchSession","session":"<UUID>"}` after

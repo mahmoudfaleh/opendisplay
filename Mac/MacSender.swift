@@ -30,6 +30,13 @@ enum SenderTransport {
     case tcp(NWEndpoint)                   // WiFi (Bonjour) or -host/-port override
     case usb(udid: String?, port: UInt16)  // native usbmuxd dial; nil = first device
     case accessory(serial: String)         // Android over USB in accessory mode (AOA)
+
+    var supportsDirectTouch: Bool {
+        switch self {
+        case .usb, .accessory: return true
+        case .tcp: return false
+        }
+    }
 }
 
 @available(macOS 14.0, *)
@@ -2623,7 +2630,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
             }
         case DirectTouchFrame.messageType:
-            guard !stopped, connectionReady, case .usb = transport,
+            guard !stopped, connectionReady, transport.supportsDirectTouch,
                   payload.count <= 4_096, let nativeTouchscreen,
                   let frame = try? JSONDecoder().decode(DirectTouchFrame.self, from: payload),
                   frame.session == directTouchSession, frame.isValid,
@@ -3430,7 +3437,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private func refreshDirectTouch() {
         guard !stopped, mode == .extend, connectionReady, helloSeenOnConnection,
-              case .usb = transport, lastHello?.directTouch == true,
+              transport.supportsDirectTouch, lastHello?.directTouch == true,
               #available(macOS 27.0, *), captureDisplayID != 0,
               UserDefaults.standard.bool(forKey: "nativeTouch"), AXIsProcessTrusted()
         else {

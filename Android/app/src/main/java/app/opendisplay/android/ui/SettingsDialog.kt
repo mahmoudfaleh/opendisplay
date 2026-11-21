@@ -29,6 +29,7 @@ class SettingsDialog : DialogFragment() {
     /** What the sheet reads and changes; implemented by MainActivity. */
     interface Host {
         val isConnected: Boolean
+        val usesDirectTouch: Boolean
         val streamSummary: String?
         val uiKind: String
         fun onNameChanged(name: String?)
@@ -72,6 +73,7 @@ class SettingsDialog : DialogFragment() {
         private val ui = Handler(Looper.getMainLooper())
         private lateinit var connection: Preference
         private lateinit var stream: Preference
+        private lateinit var touchInput: Preference
         private val host get() = requireActivity() as Host
 
         private val refresh = object : Runnable {
@@ -81,6 +83,9 @@ class SettingsDialog : DialogFragment() {
                 val summary = host.streamSummary
                 stream.isVisible = summary != null
                 stream.summary = summary
+                touchInput.isVisible = host.isConnected
+                touchInput.summary = getString(
+                    if (host.usesDirectTouch) R.string.touch_native else R.string.touch_pointer)
                 ui.postDelayed(this, 1000)
             }
         }
@@ -97,6 +102,7 @@ class SettingsDialog : DialogFragment() {
                 addPreference(info(R.string.row_listening, getString(R.string.row_listening_value)))
                 connection = info(R.string.row_connection, null).also { addPreference(it) }
                 stream = info(R.string.row_stream, null).also { addPreference(it) }
+                touchInput = info(R.string.row_touch_input, null).also { addPreference(it) }
             }
 
             screen.category(R.string.section_name) {

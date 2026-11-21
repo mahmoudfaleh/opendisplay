@@ -7,6 +7,7 @@ import app.opendisplay.android.protocol.ClockSync
 import app.opendisplay.android.protocol.Codec
 import app.opendisplay.android.protocol.CursorSequence
 import app.opendisplay.android.protocol.Demux
+import app.opendisplay.android.protocol.DirectTouch
 import app.opendisplay.android.protocol.Framing
 import app.opendisplay.android.protocol.Messages
 import app.opendisplay.android.protocol.PenInput
@@ -23,6 +24,7 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ScheduledExecutorService
@@ -115,6 +117,9 @@ class ReceiverServer(
 
     val isOnAccessory: Boolean
         get() = synchronized(lock) { current?.takeIf { it.isOpen }?.link is AccessoryLink }
+
+    val directTouchSession: String?
+        get() = current?.takeIf { it.isOpen }?.directTouchSession
 
     // region Accept and adopt
 
@@ -239,6 +244,7 @@ class ReceiverServer(
     fun sendHello() {
         val session = synchronized(lock) { current } ?: return
         val hello = helloFactory(cursorChannel?.boundPort)
+        if (session.link is AccessoryLink) hello.put("directTouch", true)
         session.send(hello)
         Log.i(TAG, "hello sent: $hello")
     }
@@ -248,6 +254,11 @@ class ReceiverServer(
     }
 
     fun sendScroll(dx: Double, dy: Double) = send(Messages.scroll(dx, dy))
+
+    internal fun sendDirectTouch(token: String, contacts: List<DirectTouch.Contact>) {
+        val session = current ?: return
+        if (session.directTouchSession == token) session.send(Messages.directTouchFrame(token, contacts))
+    }
 
     fun sendPencil(phase: String, s: PenInput.Sample) = send(Messages.pencil(phase,
         s.copy(x = s.x.coerceIn(0.0, 1.0), y = s.y.coerceIn(0.0, 1.0)), senderNow()))
@@ -288,14 +299,14 @@ class ReceiverServer(
 
     // region Inbound control
 
-    private fun handleControl(payload: ByteArray) {
+    private fun handleControl(payload: ByteArray, session: Session) {
         val obj = try {
             JSONObject(String(payload, Charsets.UTF_8))
         } catch (_: Exception) {
             return // 6: unparseable control MUST be ignored
         }
         try {
-            dispatchControl(obj)
+            dispatchControl(obj, session)
         } catch (e: Exception) {
             // A malformed field (a string where a number belongs) is the
             // sender's bug, never a reason to drop the session or crash.
@@ -303,7 +314,7 @@ class ReceiverServer(
         }
     }
 
-    private fun dispatchControl(obj: JSONObject) {
+    private fun dispatchControl(obj: JSONObject, session: Session) {
         when (val type = obj.optString("type")) {
             "pong" -> {
                 if (obj.has("t") && obj.has("mt")) {
@@ -327,6 +338,11 @@ class ReceiverServer(
                 val pv = obj.optInt("pv", WireProtocol.ASSUMED_WHEN_ABSENT)
                 senderPv = pv
                 listener.onSenderVersion(pv)
+            }
+            "directTouchSession" -> {
+                if (session.link !is AccessoryLink) return
+                val token = obj.optString("session")
+                session.directTouchSession = if (token.isEmpty()) null else UUID.fromString(token).toString()
             }
             "streamConfig" -> {
                 val token = obj.optString("codec", "h264").lowercase()
@@ -372,6 +388,7 @@ class ReceiverServer(
 
     private inner class Session(val link: Link, private val initial: ByteArray?) {
         private val outbox = LinkedBlockingQueue<ByteArray>()
+        @Volatile var directTouchSession: String? = null
         @Volatile var isOpen = true
             private set
         @Volatile var lastReceive = SystemClock.elapsedRealtime()
@@ -454,7 +471,8 @@ class ReceiverServer(
                 while (isOpen) {
                     val payload = Framing.readFrame(input) ?: break
                     lastReceive = SystemClock.elapsedRealtime()
-                    if (Demux.isControl(payload)) handleControl(payload) else listener.onVideoFrame(payload)
+                    if (current !== this) break
+                    if (Demux.isControl(payload)) handleControl(payload, this) else listener.onVideoFrame(payload)
                 }
             } catch (e: SocketTimeoutException) {
                 Log.i(TAG, "read timed out")

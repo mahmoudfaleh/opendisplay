@@ -32,6 +32,7 @@ packet-copy optimization. These are selection rules, not hardware test results.
 
 The fork also has an experimental direct-touch option for USB Extend on
 macOS 27 with an entitled development build. Both ends must support it.
+Android uses USB accessory mode. iPhone and iPad use usbmux.
 Other combinations continue using the existing pointer, scroll and Pencil
 messages. See [native touch setup](research/fork-touch-investigation.md).
 

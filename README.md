@@ -41,7 +41,7 @@ zero-heavy fixtures tested, with a dense-`1` case roughly unchanged. See
 [measurements and limits](research/fork-receiver-performance-2026-11-21.md);
 this is not a measurement of total application FPS or link bandwidth.
 
-An experimental native touchscreen path sends iPhone and iPad finger contacts
+An experimental native touchscreen path sends Android, iPhone and iPad finger contacts
 as HID digitizer reports to the OpenDisplay virtual display. The first build
 targets USB Extend sessions on macOS 27. It needs a development build with
 Apple's virtual HID entitlement and has yet to pass a signed device test.

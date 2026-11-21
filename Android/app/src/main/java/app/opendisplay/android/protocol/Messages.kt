@@ -100,6 +100,14 @@ object Messages {
     fun scroll(dx: Double, dy: Double): JSONObject =
         JSONObject().put("type", "scroll").put("dx", dx).put("dy", dy)
 
+    internal fun directTouchFrame(session: String, contacts: List<DirectTouch.Contact>): JSONObject =
+        JSONObject().put("type", "directTouchFrame").put("session", session)
+            .put("contacts", JSONArray().apply {
+                contacts.forEach { contact ->
+                    put(JSONObject().put("id", contact.id).put("x", contact.x).put("y", contact.y))
+                }
+            })
+
     fun simple(type: String): JSONObject = JSONObject().put("type", type)
 
     fun bytes(obj: JSONObject): ByteArray = obj.toString().toByteArray(Charsets.UTF_8)
