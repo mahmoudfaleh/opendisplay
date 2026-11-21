@@ -34,13 +34,21 @@ less video packet copying on both USB and WiFi. 120 Hz virtual-display support
 depends on macOS accepting the mode; a clamped or unknown source falls back
 to 60 Hz. Physical throughput and on-device 120 FPS are not yet verified.
 
+The next pass adds range-based receiver parsing, direct writes to CoreMedia-owned
+memory, coalesced replay timers and safer encoder backpressure across reconnects.
+Isolated synthetic frame preparation is about 9-10x faster for the ordinary and
+zero-heavy fixtures tested, with a dense-`1` case roughly unchanged. See
+[measurements and limits](research/fork-receiver-performance-2026-11-21.md);
+this is not a measurement of total application FPS or link bandwidth.
+
 Native touch is under investigation; the current input path still uses pointer
 and scroll events. See [development status](FORK_PROGRESS.md) and
 [touch investigation](research/fork-touch-investigation.md) for implemented
 behavior, checks and remaining work. No completed native-touch claim is made.
 
-Core checks without full Xcode: `tools/fork/check-core.sh` and
-`tools/fork/check-sender.sh`. Building the full apps still requires the upstream
+Core checks without full Xcode: `tools/fork/check-core.sh`,
+`tools/fork/check-sender.sh` and `tools/fork/check-receiver.sh`.
+Building the full apps still requires the upstream
 Xcode/xcodegen setup below. No fork binary release is available yet.
 
 ## Why OpenDisplay exists

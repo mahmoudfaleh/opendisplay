@@ -89,8 +89,9 @@ clear remaining limitations; never fake performance or native touch validation.
 
 1. Preserve the passing core checks and sender typecheck; inspect any new changes
    before extending work. Full Xcode app/iOS builds remain outstanding.
-2. Publish this feature branch to the fork through authenticated GitHub Desktop
-   if terminal networking remains unavailable.
+2. Keep the feature branch published through authenticated GitHub Desktop if
+   terminal networking remains unavailable. Initial commit `abbd6bc` was already
+   published; inspect ahead/behind status for later checkpoints.
 3. Follow research/fork-touch-investigation.md. Apple publishes touch reception
    docs and HID components; no reusable Sidecar injection source was found.
    Investigate a working direct-touch backend before claiming native support.
@@ -108,3 +109,28 @@ clear remaining limitations; never fake performance or native touch validation.
    fallback, virtual-display resize fallback and hardware encoder limitations.
 8. Update PROTOCOL.md/COMPATIBILITY.md and README with final implemented behavior
    and supported pairings. Preserve upstream controls and unknown-message safety.
+
+## Additional optimization pass - Nov 21, about 22:40 Qatar time
+
+The user requested continued optimization after the first checkpoint.
+
+- Receiver parsing now records NAL byte ranges instead of making per-NAL Data
+  copies. Lengths and picture bytes go directly into one CoreMedia-owned AVCC
+  allocation; it stays valid after the incoming Data is released or mutated.
+- Optimized the scanner with trailing-byte search and a dense-candidate scalar
+  fallback. Tested ordinary, zero-heavy and one-heavy fixtures; discarded
+  versions that regressed badly on dense cases.
+- Coalesced drop-replay timers instead of recreating one on every busy capture.
+- Added epoch-ticketed encoder accounting. Retired callbacks cannot release a
+  current stream's backpressure slot or waste packet construction after reset.
+- Added receiver typechecking, reproducible benchmarking and optional ASan to
+  the standalone core checks. The full **1,350 assertions passed normally and
+  under AddressSanitizer**. Actual sender and shared receiver typechecks passed;
+  Mac/Shared and iOS source parsing passed. Existing concurrency warnings remain.
+- Synthetic frame preparation: 32 KiB **19.240 -> 2.199 microseconds**, 256 KiB
+  **150.693 -> 14.971**, 1 MiB **603.086 -> 61.912**. Zero-heavy 32 KiB
+  **20.093 -> 1.991**; one-heavy fallback **18.962 -> 18.093**. These are CPU-stage
+  measurements, not network speed or on-glass FPS.
+- Reproduction: `research/fork-receiver-performance-2026-11-21.md` and
+  `tools/fork/benchmark-receiver.sh`. Native touch, physical link measurements
+  and full application/iOS builds remain open.

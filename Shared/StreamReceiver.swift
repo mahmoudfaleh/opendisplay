@@ -1157,28 +1157,11 @@ final class StreamReceiver: ObservableObject {
             return
         }
 
-        // Split on 4-byte start codes (our sender only emits 00 00 00 01).
-        // Bytes before the FIRST start code are the telemetry prefix
-        // ({"cap":…,"snd":…} stamped by the Mac).
-        var nalus: [Data] = []
-        var metaPrefix: Data?
-        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-            let bytes = raw.bindMemory(to: UInt8.self)
-            var naluStart: Int? = nil
-            var firstSC: Int? = nil
-            var i = 0
-            while i + 4 <= bytes.count {
-                if bytes[i] == 0, bytes[i+1] == 0, bytes[i+2] == 0, bytes[i+3] == 1 {
-                    if firstSC == nil { firstSC = i }
-                    if let s = naluStart, s < i { nalus.append(Data(bytes[s..<i])) }
-                    naluStart = i + 4
-                    i += 4
-                } else {
-                    i += 1
-                }
-            }
-            if let s = naluStart, s < bytes.count { nalus.append(Data(bytes[s...])) }
-            if let f = firstSC, f > 0 { metaPrefix = Data(bytes[0..<f]) }
+        // Keep byte ranges into the frame. Only the small, persistent codec
+        // parameter sets are copied; picture slices go straight to CoreMedia.
+        let layout = AnnexBLayout(data)
+        let metaPrefix = layout.metadataRange.map {
+            Data(data[data.index(data.startIndex, offsetBy: $0.lowerBound)..<data.index(data.startIndex, offsetBy: $0.upperBound)])
         }
 
         var captureMs: Double?
@@ -1189,35 +1172,40 @@ final class StreamReceiver: ObservableObject {
             sendMs = meta["snd"] as? Double
         }
 
-        var vclNALUs: [Data] = []
-        for nalu in nalus {
-            guard let first = nalu.first else { continue }
-            if streamCodec == "hevc" {
-                guard nalu.count >= 2 else { continue }
-                switch (first >> 1) & 0x3F {
-                case 32:  // VPS
-                    if vps != nalu { vps = nalu; formatDesc = nil }
-                case 33:  // SPS
-                    if sps != nalu { sps = nalu; formatDesc = nil }
-                case 34:  // PPS
-                    if pps != nalu { pps = nalu; formatDesc = nil }
-                case 0...31: vclNALUs.append(nalu)
-                default: break  // AUD, SEI, and other non-picture NALUs
-                }
-            } else {
-                switch first & 0x1F {
-                case 7:                                  // SPS (stream may change
-                    if sps != nalu {                     //  size on rotation)
-                        sps = nalu
-                        formatDesc = nil
+        var vclRanges: [Range<Int>] = []
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            func parameterSet(_ range: Range<Int>) -> Data {
+                Data(bytes: raw.baseAddress!.advanced(by: range.lowerBound), count: range.count)
+            }
+            for range in layout.nalRanges {
+                let first = bytes[range.lowerBound]
+                if streamCodec == "hevc" {
+                    guard range.count >= 2 else { continue }
+                    switch (first >> 1) & 0x3F {
+                    case 32:
+                        let nalu = parameterSet(range)
+                        if vps != nalu { vps = nalu; formatDesc = nil }
+                    case 33:
+                        let nalu = parameterSet(range)
+                        if sps != nalu { sps = nalu; formatDesc = nil }
+                    case 34:
+                        let nalu = parameterSet(range)
+                        if pps != nalu { pps = nalu; formatDesc = nil }
+                    case 0...31: vclRanges.append(range)
+                    default: break
                     }
-                case 8:                                  // PPS
-                    if pps != nalu {
-                        pps = nalu
-                        formatDesc = nil
+                } else {
+                    switch first & 0x1F {
+                    case 7:
+                        let nalu = parameterSet(range)
+                        if sps != nalu { sps = nalu; formatDesc = nil }
+                    case 8:
+                        let nalu = parameterSet(range)
+                        if pps != nalu { pps = nalu; formatDesc = nil }
+                    case 6: break
+                    default: vclRanges.append(range)
                     }
-                case 6: break                            // SEI — skip
-                default: vclNALUs.append(nalu)           // slice data
                 }
             }
         }
@@ -1229,9 +1217,9 @@ final class StreamReceiver: ObservableObject {
                 buildFormatDescription(sps: sps, pps: pps)
             }
         }
-        guard !vclNALUs.isEmpty else { return }
+        guard !vclRanges.isEmpty else { return }
         // All slices of one wire frame go into ONE sample buffer.
-        enqueueFrame(vclNALUs, captureMs: captureMs, sendMs: sendMs)
+        enqueueFrame(data, nalRanges: vclRanges, captureMs: captureMs, sendMs: sendMs)
     }
 
     private func buildFormatDescription(sps: Data, pps: Data) {
@@ -1304,42 +1292,18 @@ final class StreamReceiver: ObservableObject {
         }
     }
 
-    private func enqueueFrame(_ nalus: [Data], captureMs: Double? = nil, sendMs: Double? = nil) {
+    private func enqueueFrame(_ data: Data, nalRanges: [Range<Int>],
+                              captureMs: Double? = nil, sendMs: Double? = nil) {
         guard let formatDesc else { return }
         // Backgrounded linger: hardware decode is off-limits there, so drop
         // frames at the door instead of feeding a failing display layer at
         // frame rate. setRenderingPaused(false) re-syncs with a keyframe.
         if renderingPaused { return }
 
-        // Build one AVCC buffer: each NALU prefixed with 4-byte big-endian length.
-        var avcc = Data(capacity: nalus.reduce(0) { $0 + $1.count + 4 })
-        for nalu in nalus {
-            var len = UInt32(nalu.count).bigEndian
-            avcc.append(Data(bytes: &len, count: 4))
-            avcc.append(nalu)
-        }
-
-        // Allocate a block buffer that OWNS its memory and copy the bytes in —
-        // referencing a transient Swift buffer here is a use-after-free.
-        var blockBuffer: CMBlockBuffer?
-        guard CMBlockBufferCreateWithMemoryBlock(
-                allocator: kCFAllocatorDefault,
-                memoryBlock: nil,                   // let CoreMedia allocate
-                blockLength: avcc.count,
-                blockAllocator: kCFAllocatorDefault,
-                customBlockSource: nil, offsetToData: 0,
-                dataLength: avcc.count, flags: 0,
-                blockBufferOut: &blockBuffer) == noErr,
-              let blockBuffer else { return }
-        let copyStatus = avcc.withUnsafeBytes { raw in
-            CMBlockBufferReplaceDataBytes(
-                with: raw.baseAddress!, blockBuffer: blockBuffer,
-                offsetIntoDestination: 0, dataLength: avcc.count)
-        }
-        guard copyStatus == noErr else { return }
+        guard let blockBuffer = AVCCBlockBuffer.make(from: data, nalRanges: nalRanges) else { return }
 
         var sample: CMSampleBuffer?
-        var sizeArr = [avcc.count]
+        var sizeArr = [CMBlockBufferGetDataLength(blockBuffer)]
         CMSampleBufferCreateReady(
             allocator: kCFAllocatorDefault,
             dataBuffer: blockBuffer,

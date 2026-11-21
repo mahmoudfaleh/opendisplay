@@ -152,9 +152,11 @@ targets:
     sources:
       - MacTests
       - tools/fork/CoreChecks.swift
+      - tools/fork/ReceiverCoreChecks.swift
       - Mac/DisplayArrangement.swift
       - Mac/OriginRestore.swift
       - Mac/StreamConfiguration.swift
+      - Mac/EncodeWorkCounter.swift
       - Mac/VirtualCanvasSizing.swift
       - Mac/PhoneInfo.swift
       - Mac/DesktopPolicy.swift
@@ -165,6 +167,8 @@ targets:
       - Mac/LogPolicies.swift
       - Shared/Protocol.swift
       - Shared/WirePacketBuilder.swift
+      - Shared/AnnexBLayout.swift
+      - Shared/AVCCBlockBuffer.swift
       - Shared/DirectCable.swift
       - Shared/LogSnapshot.swift
       - MacReceiver/FullscreenPreference.swift

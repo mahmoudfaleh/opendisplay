@@ -91,6 +91,28 @@ enum ForkCoreChecks {
         try check(packet.dropFirst(4) == expectedPayload, "metadata/Annex B wire compatibility regression")
         var empty = WirePacketBuilder()
         try check(empty.finalize() == Data([0, 0, 0, 0]), "empty framing regression")
+        var encodes = EncodeWorkCounter()
+        let retired = encodes.begin()
+        try check(encodes.count == 1, "encode admission must occupy a slot")
+        encodes.reset()
+        let current = encodes.begin()
+        encodes.finish(retired)
+        try check(encodes.count == 1, "retired encoder callback must not release a current slot")
+        try check(!encodes.isCurrent(retired) && encodes.isCurrent(current),
+                  "encoder reset must retire its old work")
+        encodes.finish(current)
+        try check(encodes.count == 0, "current callback must release its slot")
+        encodes.finish(current)
+        try check(encodes.count == 0, "encode count must not underflow")
+        for _ in 0..<500 {
+            let old = encodes.begin()
+            encodes.reset()
+            let fresh = encodes.begin()
+            encodes.finish(old)
+            try check(encodes.count == 1, "repeated pipeline replacement must preserve current backpressure")
+            encodes.finish(fresh)
+        }
+        count += try ReceiverCoreChecks.run()
         print("PASS: \(count) core regression checks")
     }
 }

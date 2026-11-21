@@ -107,7 +107,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // on enc drops. Same for both codecs: measured on an M5 Pro, a second slot
     // buys frames only below 5K and roughly doubles p95 latency, at 5K it buys
     // none (research/hevc-m5-2026-09-29).
-    private var pendingEncodes = 0
+    private var pendingEncodes = EncodeWorkCounter()
     private var maxPendingEncodes: Int {
         #if DEBUG
         let override = UserDefaults.standard.integer(forKey: "maxPendingEncodes")
@@ -1470,7 +1470,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             self.stopUpgradeProbing()
             self.pendingSends = 0
             self.pipelineLock.lock()
-            self.pendingEncodes = 0
+            self.pendingEncodes.reset()
             self.pipelineLock.unlock()
             self.connect()
         }
@@ -2189,7 +2189,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         closeCursorChannel()   // rebuilt from the next hello
         pendingSends = 0
         pipelineLock.lock()
-        pendingEncodes = 0
+        pendingEncodes.reset()
         pipelineLock.unlock()
         queue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             // Generation-guarded so a switchTransport (or another reconnect)
@@ -2877,12 +2877,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private func isPipelineBackedUp() -> Bool {
         pipelineLock.lock()
         defer { pipelineLock.unlock() }
-        return pendingEncodes >= maxPendingEncodes || pendingSends >= maxPendingSends
+        return pendingEncodes.count >= maxPendingEncodes || pendingSends >= maxPendingSends
     }
 
-    /// Schedule (or reset) a one-shot replay of `lastPixelBuffer` after drops.
+    /// Coalesce drops into one replay of the newest `lastPixelBuffer`.
     private func scheduleDropReplayTimer() {
-        dropReplayTimer?.cancel()
+        // Captures can arrive at twice the selected cadence. Recreating this
+        // timer for every drop wastes work and can keep pushing its deadline
+        // back while the encoder/link remains busy.
+        guard dropReplayTimer == nil else { return }
         let timer = DispatchSource.makeTimerSource(queue: queue)
         // A pacing drop may be the final changed capture frame. Retry after
         // one selected frame interval so it is admitted without adding a
@@ -2977,7 +2980,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let drop: Bool
         switch reason {
         case "pending_encode":
-            drop = pendingEncodes >= maxPendingEncodes
+            drop = pendingEncodes.count >= maxPendingEncodes
         case "pending_sends":
             drop = pendingSends >= maxPendingSends
         default:
@@ -3008,7 +3011,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             return
         }
         pipelineLock.lock()
-        pendingEncodes += 1
+        let encodeTicket = pendingEncodes.begin()
         pipelineLock.unlock()
         let deliveryGeneration = connectionGeneration
         let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -3028,8 +3031,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             guard let self else { return }
             var deliveryEnqueued = false
             defer {
-                if !deliveryEnqueued { self.finishPendingEncode() }
+                if !deliveryEnqueued { self.finishPendingEncode(encodeTicket) }
             }
+            self.pipelineLock.lock()
+            let stillCurrent = self.pendingEncodes.isCurrent(encodeTicket)
+            self.pipelineLock.unlock()
+            guard stillCurrent else { return }
             self.noteEncodeResult(succeeded: status == noErr && buffer != nil)
             guard status == noErr, let buffer else {
                 // A session rejecting every frame looks healthy in all other
@@ -3051,7 +3058,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 // pending send without an observable backpressure gap.
                 deliveryEnqueued = true
                 self.enqueueFramed(framed, captureGeneration: generation,
-                                   connectionGeneration: deliveryGeneration)
+                                   connectionGeneration: deliveryGeneration,
+                                   encodeTicket: encodeTicket)
             }
         }
         if submitStatus == noErr {
@@ -3060,7 +3068,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             cancelDropReplayTimer()
         } else {
             pipelineLock.lock()
-            pendingEncodes = max(0, pendingEncodes - 1)
+            pendingEncodes.finish(encodeTicket)
             // A dead encoder session keeps failing, and this runs per frame, so
             // an unthrottled line here is ~60/sec for as long as the problem
             // lasts. Report at most once a second and carry the count: the
@@ -3075,9 +3083,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
-    private func finishPendingEncode() {
+    private func finishPendingEncode(_ ticket: UInt64) {
         pipelineLock.lock()
-        pendingEncodes = max(0, pendingEncodes - 1)
+        pendingEncodes.finish(ticket)
         pipelineLock.unlock()
     }
 
@@ -3300,10 +3308,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// single total order. Frames encoded for a retired connection are dropped;
     /// `becomeReady` forces the next admitted frame to be an IDR.
     private func enqueueFramed(_ packet: Data, captureGeneration: UInt64,
-                               connectionGeneration: UInt64) {
+                               connectionGeneration: UInt64, encodeTicket: UInt64) {
         queue.async { [weak self] in
             guard let self else { return }
-            self.finishPendingEncode()
+            self.finishPendingEncode(encodeTicket)
             guard self.captureGenerationNow == captureGeneration,
                   self.connectionGeneration == connectionGeneration else { return }
             self.sendFramedOnQueue(packet)
@@ -3378,6 +3386,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private func invalidateCapturePipeline(discardingLastFrame: Bool = false) {
         pipelineLock.lock()
         captureGeneration &+= 1
+        pendingEncodes.reset()
         activeStreamConfiguration = nil
         frameRateLimiter = FrameRateLimiter(framesPerSecond: 60)
         pipelineLock.unlock()

@@ -1,0 +1,7 @@
+case,bytes,iterations_per_round,rounds,legacy_us,optimized_us,speedup
+32KiB-video,32799,600,7,19.240,2.199,8.75
+256KiB-video,262175,150,7,150.693,14.971,10.07
+1MiB-keyframe,1048607,50,7,603.086,61.912,9.74
+32KiB-zero-heavy,32799,600,7,20.093,1.991,10.09
+32KiB-one-heavy,32799,600,7,18.962,18.093,1.05
+# checksum=2136281040

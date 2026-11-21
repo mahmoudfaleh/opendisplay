@@ -9,7 +9,7 @@ if swiftc -typecheck -swift-version 5 -target arm64-apple-macos14 \
     -module-cache-path build/fork-core/modules \
     -import-objc-header Mac/OpenSidecarMac-Bridging-Header.h \
     Mac/MacSender.swift Mac/VirtualDisplay.swift Mac/VirtualCanvasSizing.swift \
-    Mac/StreamConfiguration.swift Mac/DesktopPolicy.swift Mac/PhoneInfo.swift \
+    Mac/StreamConfiguration.swift Mac/EncodeWorkCounter.swift Mac/DesktopPolicy.swift Mac/PhoneInfo.swift \
     Mac/Usbmux.swift Mac/USBAccessory.swift Mac/AndroidUSBFunction.swift \
     Mac/AccessoryDeviceWatcher.swift Mac/DisplayArrangement.swift \
     Mac/OriginRestore.swift Mac/InputInjector.swift Mac/CaptureSourceCheck.swift \
