@@ -9,9 +9,11 @@ unavailable the receiver uses its existing input mode.
 
 ## Build and try
 
-1. Build the Mac sender and your receiver from this branch. For Android,
-   use the [Android build instructions](../Android/README.md). Use macOS 27
-   or later for the sender.
+1. Build the Mac sender from this branch and use it on macOS 27 or later.
+   For Android, build the receiver with the [Android build instructions](../Android/README.md)
+   or check [GitHub Actions](https://github.com/mahmoudfaleh/opendisplay/actions/workflows/fork-touch-test-apk.yml)
+   for a successful **Android touchscreen test APK** run. The debug APK installs
+   alongside the Play Store app as **OpenDisplay Dev**.
 2. For the Mac sender's Debug configuration, select an Apple Development
    certificate and a matching macOS App Development provisioning profile
    containing `com.apple.developer.hid.virtual.device`. The profile must match
@@ -19,17 +21,26 @@ unavailable the receiver uses its existing input mode.
    set **Code Signing Entitlements** for Debug to
    `Mac/NativeTouchDevelopment.entitlements`. A plist by itself does not grant
    the capability. The regular release build uses its own signing settings.
-3. Launch the signed development sender with `-nativeTouch YES` in the Xcode
-   scheme's launch arguments. Grant the dev sender its usual Screen Recording
-   and Accessibility permissions. Choose **Extend**. On Android, use a data
+3. Launch the signed development sender with `./run.sh -nativeTouch YES`
+   or pass `-nativeTouch YES` in the Xcode scheme's launch arguments. Quit any
+   running copy of OpenDisplay Dev first. Grant the dev sender its usual
+   Screen Recording and Accessibility permissions. Choose **Extend**. On Android, use a data
    cable and choose the tablet under USB on the Mac. When the tablet prompts
    you, open **OpenDisplay Dev** for the USB accessory. On iOS, connect the
    trusted iPhone or iPad over USB and open the fork receiver.
 4. The receiver's **Settings → Status → Finger input** shows the negotiated
-   mode. **Native touchscreen** confirms the sender opened the digitizer.
-   To verify delivery, try a tap, one-finger scroll and two-finger pinch in a
-   touch-aware macOS app on the extended display. Verify that the Mac's own
-   display receives no touch and that unplugging during a gesture releases it.
+   mode. The sender announces **Native touchscreen** after macOS accepts
+   its first HID report. To verify AppKit delivery, run
+   `open "$(tools/fork/build-touch-test.sh)"`, then move **OpenDisplay Direct
+   Touch Test** to the tablet display. Press two fingers inside its window.
+   **Most at once** should reach 2, and **Active fingers** should drop to 0
+   when both lift. Check that unplugging mid-gesture clears the count and
+   try one-finger scrolling and a two-finger pinch in a touch-aware app.
+
+If native mode stays inactive, the Mac sender log distinguishes a missing
+entitlement, a rejected device, and a failed HID report. An accepted HID
+report confirms kernel submission. The test window checks the separate step
+of macOS delivering those contacts to applications on the extended display.
 
 Native touch on Android uses Android Open Accessory mode, so the tablet
 does not need USB debugging. Wi-Fi, ADB forwarding and Mirror use pointer

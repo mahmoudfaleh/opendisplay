@@ -1,0 +1,33 @@
+name: Android touchscreen test APK
+
+on:
+  push:
+    branches: [feat/high-refresh-streaming]
+    paths:
+      - 'Android/**'
+      - '.github/workflows/fork-touch-test-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Test and build the Android debug app
+        working-directory: Android
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OpenDisplay-Android-Touch-Test
+          path: Android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14

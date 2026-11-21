@@ -26,5 +26,9 @@ if codesign -dv "$APP" 2>&1 | grep -q 'Signature=adhoc' \
   codesign --verify --deep --strict "$APP"
 fi
 
-open "$APP"
+if (( $# > 0 )); then
+  open "$APP" --args "$@"
+else
+  open "$APP"
+fi
 echo "OpenDisplay Dev running — logs at ~/Library/Logs/OpenDisplay Dev/opendisplay.log."

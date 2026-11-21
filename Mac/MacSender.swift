@@ -2640,8 +2640,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 endDirectTouch(notify: true)
                 return
             }
-            if !nativeTouchscreen.send(frame.contacts) {
-                Log.info("native touch: HID report failed")
+            let status = nativeTouchscreen.send(frame.contacts)
+            if status != kIOReturnSuccess {
+                Log.info("native touch: HID report failed with status \(status)")
                 endDirectTouch(notify: true)
                 touchAttemptedDisplay = captureDisplayID
             }
@@ -3449,8 +3450,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard touchAttemptedDisplay != display else { return }
         endDirectTouch(notify: true)
         touchAttemptedDisplay = display
-        guard let device = NativeTouchscreen(displayID: display, queue: queue) else {
-            Log.info("native touch unavailable: virtual touchscreen creation failed (check Apple HID signing)")
+        let device: NativeTouchscreen
+        do {
+            device = try NativeTouchscreen(displayID: display, queue: queue)
+        } catch {
+            Log.info("native touch unavailable: \(error.localizedDescription)")
             return
         }
         nativeTouchscreen = device
@@ -3459,6 +3463,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             guard let self, let device, self.nativeTouchscreen === device,
                   !self.stopped, self.connectionReady, self.captureDisplayID == display,
                   AXIsProcessTrusted(), CGDisplayIsActive(display) != 0 else { return }
+            // Confirm the kernel can accept a report before switching the
+            // receiver away from compatibility input.
+            let status = device.send([])
+            guard status == kIOReturnSuccess else {
+                Log.info("native touch unavailable: initial HID report failed with status \(status)")
+                self.endDirectTouch()
+                self.touchAttemptedDisplay = display
+                return
+            }
             self.directTouchSession = device.session
             self.sendJSONFrame("{\"type\":\"\(DirectTouchFrame.sessionMessage)\",\"session\":\"\(device.session.uuidString)\"}")
             Log.info("native touch: digitizer created for OpenDisplay display \(display)")
